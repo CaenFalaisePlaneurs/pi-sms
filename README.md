@@ -34,7 +34,25 @@ The E3372 in HiLink mode presents itself as a USB network card (typically `eth1`
 
 ## Installation
 
-Follow these steps one by one.
+### One-command install
+
+On the target Raspberry Pi, run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/CaenFalaisePlaneurs/pi-sms/main/scripts/install.sh | sh
+```
+
+This installs the base tools, creates the virtual environment, installs the
+package, and runs the setup (modem network profile, systemd service, config
+template) using the packaged `config.example.yaml`. After it finishes, edit
+`/etc/pi-sms/config.yaml` and start the service:
+
+```bash
+sudo nano /etc/pi-sms/config.yaml
+sudo systemctl start pi-sms
+```
+
+If you prefer to verify every step manually, follow the steps below instead.
 
 ### Step 1: Create a virtual environment
 
@@ -42,7 +60,7 @@ python3 -m venv ~/pi-sms-venv
 
 ### Step 2: Install the software
 
-~/pi-sms-venv/bin/pip install git+https://github.com/nmassart/pi-sms.git
+~/pi-sms-venv/bin/pip install git+https://github.com/CaenFalaisePlaneurs/pi-sms.git
 
 ### Step 3: Run the setup
 
@@ -137,7 +155,19 @@ Or use the Cursor commands `/quality-check` and `/quality-fix`.
 
 ## Uninstallation
 
-sudo bash scripts/uninstall.sh
+Stop and disable the service, then remove the package:
+
+```bash
+sudo ~/pi-sms-venv/bin/python -m pi_sms.setup.uninstall
+~/pi-sms-venv/bin/pip uninstall pi-sms
+```
+
+Optionally remove the modem network profile and the virtual environment:
+
+```bash
+sudo nmcli connection delete pi-sms-modem
+rm -rf ~/pi-sms-venv
+```
 
 Configuration at `/etc/pi-sms/config.yaml` is preserved (following Debian best practices).
 

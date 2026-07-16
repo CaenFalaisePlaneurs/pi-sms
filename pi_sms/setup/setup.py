@@ -99,6 +99,9 @@ def create_systemd_service() -> bool:
     service_user = get_current_user()
 
     possible_locations = [
+        # Bundled via data_files into the (venv) prefix on a pip install
+        Path(sys.prefix) / "etc" / "systemd" / "system" / "pi-sms.service",
+        # Running from a source checkout
         Path(__file__).parent.parent.parent / "deploy" / "pi-sms.service",
         service_file_dest,
     ]
@@ -111,7 +114,7 @@ def create_systemd_service() -> bool:
 
     if os.geteuid() != 0:
         print("Error: This command requires sudo privileges.")
-        print("Please run: sudo pi-sms-setup")
+        print("Please run this setup with sudo.")
         return False
 
     try:
@@ -157,6 +160,9 @@ def create_systemd_service() -> bool:
 def get_config_example_content() -> str | None:
     """Get the content of config.example.yaml from the package or repository."""
     possible_locations = [
+        # Bundled via data_files into the (venv) prefix on a pip install
+        Path(sys.prefix) / "usr" / "share" / "pi-sms" / "config.example.yaml",
+        # Running from a source checkout
         Path(__file__).parent.parent.parent / "config.example.yaml",
         Path("/usr/share/pi-sms/config.example.yaml"),
     ]
@@ -186,7 +192,7 @@ def create_config_template() -> bool:
 
     if os.geteuid() != 0:
         print("Error: This command requires sudo privileges.")
-        print("Please run: sudo pi-sms-setup")
+        print("Please run this setup with sudo.")
         return False
 
     try:
@@ -203,8 +209,12 @@ def create_config_template() -> bool:
         return False
 
 
-def enable_and_start_service() -> bool:
-    """Enable and optionally start the systemd service.
+def enable_service() -> bool:
+    """Enable the systemd service to start on boot.
+
+    The service is intentionally not started here: the config template still
+    holds placeholder Trello credentials at this point, so starting is left as
+    an explicit step once the operator has edited the config.
 
     Returns:
         True if the service was enabled, False otherwise
@@ -217,28 +227,12 @@ def enable_and_start_service() -> bool:
 
     if os.geteuid() != 0:
         print("Error: This command requires sudo privileges.")
-        print("Please run: sudo pi-sms-setup")
+        print("Please run with sudo.")
         return False
 
     try:
         subprocess.run(["systemctl", "enable", service_name], check=True)
         print(f"Enabled {service_name} service (will start on boot)")
-
-        config_file = Path("/etc/pi-sms/config.yaml")
-        if config_file.exists():
-            config_content = config_file.read_text()
-            if "your-trello-api-key" in config_content:
-                print("Configuration file still contains example values.")
-                print(f"Please edit {config_file} before starting the service.")
-                response = input("Start the service anyway? (y/N): ").strip().lower()
-                if response != "y":
-                    print(
-                        f"Service enabled but not started. Start it with: sudo systemctl start {service_name}"
-                    )
-                    return True
-
-        subprocess.run(["systemctl", "start", service_name], check=True)
-        print(f"Started {service_name} service")
         return True
     except subprocess.CalledProcessError as e:
         print(f"Error managing service: {e}")
@@ -271,7 +265,7 @@ def main() -> None:
         sys.exit(1)
 
     print("\n[4/4] Enabling service...")
-    if not enable_and_start_service():
+    if not enable_service():
         print("Failed to enable service")
         sys.exit(1)
 
@@ -282,8 +276,9 @@ def main() -> None:
     print()
     print("Next steps:")
     print("1. Edit configuration: sudo nano /etc/pi-sms/config.yaml")
-    print("2. Check service status: sudo systemctl status pi-sms")
-    print("3. View logs: sudo journalctl -u pi-sms -f")
+    print("2. Start the service:   sudo systemctl start pi-sms")
+    print("3. Check service status: sudo systemctl status pi-sms")
+    print("4. View logs: sudo journalctl -u pi-sms -f")
 
 
 if __name__ == "__main__":
