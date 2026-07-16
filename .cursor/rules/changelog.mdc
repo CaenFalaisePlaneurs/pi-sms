@@ -1,0 +1,50 @@
+---
+globs: CHANGELOG.md
+alwaysApply: false
+---
+# Changelog Guidelines
+
+Follow the [Common Changelog](https://common-changelog.org) style guide when updating `CHANGELOG.md`.
+
+## Format
+
+```markdown
+## [X.Y.Z] - YYYY-MM-DD
+
+### Changed
+
+- Description of change ([#123](link)) ([@author](link))
+
+[X.Y.Z]: https://github.com/nmassart/pi-sms/releases/tag/vX.Y.Z
+```
+
+## Rules
+
+1. **Date format**: Use ISO 8601 (`YYYY-MM-DD`). Run `date +%Y-%m-%d` to get today's date.
+2. **Categories** (in order, only include if applicable):
+   - `Changed` - changes in existing functionality
+   - `Added` - new features
+   - `Removed` - removed features
+   - `Fixed` - bug fixes
+3. **References**: Link to PR/issue at end of line: `([#123](url))`
+4. **Authors**: Credit contributors: `([@name](url))`
+5. **Breaking changes**: Prefix with `**Breaking:**` and explain migration
+6. **Imperative mood**: Write "Add feature" not "Added feature"
+7. **No prefixes**: Don't use `feat:`, `fix:`, etc. - use natural language
+8. **Link releases**: Add reference link at bottom for each version
+
+## Example Entry
+
+```markdown
+## [0.2.0] - 2026-08-01
+
+### Added
+
+- Support for multiple Trello lists based on sender ([#12](https://github.com/nmassart/pi-sms/pull/12))
+
+### Fixed
+
+- **Breaking:** Rename `poll.interval_seconds` to `poll.interval` ([#10](https://github.com/nmassart/pi-sms/pull/10))
+
+[0.2.0]: https://github.com/nmassart/pi-sms/releases/tag/v0.2.0
+```

@@ -1,0 +1,146 @@
+# pi-sms
+
+A Python 3.13 background service for Raspberry Pi that receives SMS via a Huawei E3372 HiLink modem, filters out known-noise messages, and creates a Trello card for each remaining message.
+
+## Features
+
+- **SMS polling**: Regularly checks the E3372 HiLink modem's SMS inbox via its web API (no AT commands, no serial port)
+- **Pattern filtering**: Discards messages matching configured regex patterns (e.g. Free Mobile voicemail notifications) without creating a card
+- **Trello card creation**: One card per kept message, in a configured Trello list, via the Trello REST API
+- **Self-cleaning inbox**: Each message is deleted from the modem once handled (card created, or filtered out) so the modem's limited SMS storage never fills up; a Trello failure leaves the message for the next poll to retry
+- **Isolated modem networking**: Setup provisions a static, never-default network profile for the modem's USB interface, so it's reachable on every boot without ever disrupting the Pi's LAN connection
+- **Systemd service**: Auto-start, auto-restart, journald logging
+
+## Requirements
+
+- Raspberry Pi (any model with NetworkManager and a spare USB port)
+- Python 3.13.5 (already included on Raspberry Pi OS)
+- Huawei E3372 in HiLink mode (USB ID `12d1:14dc`), with an active SIM
+- A Trello account, API key and token, and a destination list
+
+## How it works
+
+```mermaid
+flowchart LR
+  sched["Poll every N seconds"] --> list["List SMS inbox (HiLink API)"]
+  list --> filt{"Matches exclude pattern?"}
+  filt -->|"yes"| del1["Delete from modem"]
+  filt -->|"no"| card["Create Trello card"]
+  card -->|"success"| del2["Delete from modem"]
+  card -->|"failure"| retry["Leave on modem, retry next poll"]
+```
+
+The E3372 in HiLink mode presents itself as a USB network card (typically `eth1`) hosting a web API at `http://192.168.8.1`. There is no `/dev/ttyUSB*` device and no AT command interface. Every state-changing API call (listing or deleting SMS) requires a fresh session token fetched immediately beforehand from `/api/webserver/SesTokInfo` (a CSRF-style flow).
+
+## Installation
+
+Follow these steps one by one.
+
+### Step 1: Create a virtual environment
+
+python3 -m venv ~/pi-sms-venv
+
+### Step 2: Install the software
+
+~/pi-sms-venv/bin/pip install git+https://github.com/nmassart/pi-sms.git
+
+### Step 3: Run the setup
+
+This command will:
+
+- Provision the modem's network interface (static IP, isolated from the LAN default route)
+- Create the systemd service
+- Create the configuration file template
+- Enable the service to start on boot
+
+sudo /home/$(whoami)/pi-sms-venv/bin/python -m pi_sms.setup.setup
+
+### Step 4: Configure the software
+
+sudo nano /etc/pi-sms/config.yaml
+
+Set at minimum:
+
+- `trello.key`, `trello.token`, `trello.list_id`
+- `filter.exclude_patterns` if you want to add more patterns beyond the Free Mobile voicemail example
+
+### Step 5: Start the service
+
+sudo systemctl start pi-sms
+
+### Step 6: Check if it's working
+
+sudo systemctl status pi-sms
+sudo journalctl -u pi-sms -f
+
+## Modem networking
+
+The E3372's web API is only reachable once its USB network interface (`eth1`) has an IP address in the modem's subnet. `pi-sms-setup` creates a NetworkManager connection profile (`pi-sms-modem`) with:
+
+- A static address (`192.168.8.100/24`) on `eth1`, matching the modem's default subnet
+- `ipv4.never-default yes` and IPv6 disabled, so it can never hijack the Pi's default route or LAN connectivity (`eth0`)
+- `connection.autoconnect yes`, so it comes up automatically on every boot
+
+This profile can be inspected or removed with standard `nmcli` commands:
+
+nmcli connection show pi-sms-modem
+sudo nmcli connection delete pi-sms-modem
+
+## Configuration
+
+See [config.example.yaml](config.example.yaml) for all configuration options, including:
+
+- `modem`: base URL and request timeout for the HiLink API
+- `poll`: how often to check the inbox
+- `filter`: regex patterns for messages to discard without a card
+- `trello`: API key/token, destination list, and card title/description templates
+- `debug`: faster poll interval when `DEBUG_MODE=true`
+
+## Service Management
+
+sudo systemctl start pi-sms
+sudo systemctl stop pi-sms
+sudo systemctl restart pi-sms
+sudo systemctl status pi-sms
+sudo systemctl disable pi-sms
+sudo systemctl enable pi-sms
+
+## Troubleshooting
+
+### Service won't start
+
+sudo journalctl -u pi-sms -n 50
+
+### Modem unreachable
+
+Check the network profile is active and the modem answers:
+
+nmcli -t -f DEVICE,STATE device
+ip -br addr show eth1
+curl -s -o /dev/null -w '%{http_code}\n' http://192.168.8.1/
+
+### No SIM / no signal
+
+Check SIM and signal status directly:
+
+curl -s http://192.168.8.1/api/webserver/SesTokInfo
+
+then use the returned `SesInfo`/`TokInfo` to call `/api/monitoring/status` with the `Cookie` and `__RequestVerificationToken` headers, and look for `SimStatus` (`1` = OK, `255` = no SIM detected) and `SignalIcon`.
+
+## Development
+
+source venv/bin/activate  # after scripts/setup-venv.sh
+pip install -r requirements-dev.txt
+ruff check pi_sms tests && black --check pi_sms tests && mypy pi_sms && pytest tests/
+
+Or use the Cursor commands `/quality-check` and `/quality-fix`.
+
+## Uninstallation
+
+sudo bash scripts/uninstall.sh
+
+Configuration at `/etc/pi-sms/config.yaml` is preserved (following Debian best practices).
+
+## License
+
+MIT - See [LICENSE](LICENSE) for details.

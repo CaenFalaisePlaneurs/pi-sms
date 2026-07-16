@@ -1,0 +1,35 @@
+# Huawei E3372 HiLink modem configuration.
+# The modem must be reachable at this address (see README "Modem networking" section
+# for the eth1 network profile set up by `pi-sms-setup`).
+modem:
+  base_url: "http://192.168.8.1"
+  request_timeout_seconds: 10
+
+# SMS inbox polling configuration.
+poll:
+  interval_seconds: 30 # How often to check the modem's SMS inbox
+
+# Filtering: messages matching any pattern below are deleted from the modem
+# without creating a Trello card. Patterns are Python regex, matched against
+# the raw SMS content (case-sensitive by default, use (?i) for case-insensitive).
+filter:
+  exclude_patterns:
+    - '^Messagerie "666" Free:' # Free Mobile voicemail notification
+
+# Trello configuration: where to create a card for each kept SMS.
+# Create an API key at https://trello.com/power-ups/admin (or https://trello.com/app-key)
+# and a token by visiting the authorize URL it gives you.
+# The list_id is the destination Trello list ID (open the list menu > "..." > and
+# use the Trello API `GET /1/boards/{id}/lists` to find it, or the card URL JSON).
+trello:
+  key: "your-trello-api-key"
+  token: "your-trello-api-token"
+  list_id: "your-trello-list-id"
+  card_name_template: "SMS from {phone}"
+  card_desc_template: "{content}"
+
+# Debug mode (for development/testing only)
+# Enable via DEBUG_MODE environment variable (DEBUG_MODE=true)
+# When enabled, uses a faster poll interval than poll.interval_seconds
+debug:
+  poll_interval_seconds: 5

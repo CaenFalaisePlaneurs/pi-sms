@@ -1,0 +1,165 @@
+---
+alwaysApply: true
+---
+
+# Code Guidelines for pi-sms
+
+Quick reference for AI-assisted development. The codebase itself is the primary reference.
+
+## Python Version
+
+- **Target**: Python 3.13.5 (Raspberry Pi default)
+- **Range**: >=3.11, <3.14
+- Use modern type syntax: `X | None` over `Optional[X]`, `datetime.UTC` over `timezone.utc`
+
+## Type Annotations (Required)
+
+- All functions must have parameter and return type annotations
+- Use `mypy` strict mode (`disallow_untyped_defs = true`)
+- Prefer `collections.abc.Callable` over `typing.Callable`
+- Use `dict[str, Any]` not `Dict[str, Any]`
+
+### Handling Third-Party Libraries Without Type Stubs
+
+When importing from third-party libraries that don't have type stubs (e.g., `apscheduler`), use inline type ignore comments:
+
+```python
+from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore[import-untyped]
+from apscheduler.triggers.interval import IntervalTrigger  # type: ignore[import-untyped]
+```
+
+- Use `# type: ignore[import-untyped]` on the import line
+- Be specific with the error code (`[import-untyped]`) rather than generic `# type: ignore`
+- Do NOT add global mypy overrides in `pyproject.toml` for this (inline comments are clearer)
+- Do NOT use `# type: ignore` without the specific error code
+
+## UTC Time Handling
+
+- Use `datetime.now(UTC)` for all timestamps (Trello card descriptions, logs, state)
+- ISO 8601 with 'Z' suffix: `2026-01-02T15:30:00Z`
+- Never use `datetime.now()` without timezone
+
+## Virtual Environment (Required)
+
+**All operations must be performed within the virtual environment:**
+
+- Always activate venv first: `source venv/bin/activate`
+- Install dependencies in venv: `pip install -r requirements.txt`
+- Run all commands in venv: quality checks, tests, type checking, formatting
+
+**Why?** The project dependencies (ruff, black, mypy, pytest, etc.) are installed in the virtual environment, not system-wide.
+
+## Code Quality
+
+- **Formatting**: Black, 100 char line length
+- **Linting**: Ruff (E, F, I, N, W, UP rules)
+- **Type checking**: mypy (strict mode)
+- **Tests**: pytest with pytest-asyncio
+- **Unit Tests**: Whenever code changes are made, unit tests must be checked and updated if needed. Run `pytest` to verify all tests pass (in venv).
+- Run `/quality-fix` before committing (in venv)
+
+## Backward Compatibility
+
+**Before making any change that affects APIs, function signatures, or configuration:**
+
+1. Ask: does this change need to be backward compatible?
+2. For this project: this is a **new, never-released application** - backward compatibility is NOT required
+3. When making breaking changes:
+   - Remove old/deprecated parameters, functions, or code paths
+   - Update all call sites and tests to use the new approach
+   - Do NOT add backward compatibility code unless explicitly required
+
+## Error Handling Pattern
+
+Use result dataclasses instead of exceptions for control flow:
+
+```python
+@dataclass
+class Result:
+    success: bool
+    data: dict[str, Any] | None = None
+    error: str | None = None
+
+def operation() -> Result:
+    try:
+        return Result(success=True, data=...)
+    except Exception as e:
+        return Result(success=False, error=str(e))
+```
+
+## Testing Pattern
+
+Use dependency injection for external dependencies (HTTP clients, subprocess calls) so tests can substitute fakes without patching internals.
+
+## Logging
+
+- **Only lifecycle events**: start/stop, first modem connection, poll results, card created, message deleted, schedule/config errors
+- **Format**: `"Created Trello card for SMS from {phone}"`
+- **Never log full SMS content or Trello token/key** - redact with `***` if needed
+
+## Module Structure
+
+- Module-level docstring required
+- Support both package and script execution:
+```python
+try:
+    from .module import func
+except ImportError:
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from pi_sms.module import func
+```
+
+## File Organization
+
+**Prefer separate files for distinct features:**
+
+- Split large files into smaller, focused modules (one feature/concern per file)
+- Keep files focused and testable - easier to navigate and maintain
+- Avoid monolithic files with many unrelated functions or classes
+
+## Special Cases
+
+### HiLink Modem API
+
+- The E3372 HiLink CSRF flow requires fetching `SesTokInfo` before **every** state-changing request (list/delete SMS): the `SessionID` cookie and `__RequestVerificationToken` header must come from the same fetch and are single-use for POST requests
+- Never hardcode the modem base URL in business logic - it comes from config (`modem.base_url`, default `http://192.168.8.1`)
+- Treat modem errors (no SIM, no signal, timeout) as recoverable - log and retry next poll, never crash the daemon
+
+### Async Operations
+
+- Use `async`/`await` for I/O (HTTP to modem and Trello)
+- Prevent concurrent polls with an `is_running` flag
+- Use `APScheduler` for async job scheduling
+
+## Dependencies
+
+**When adding new dependencies, update BOTH files:**
+
+- `pyproject.toml` - primary source of truth for package dependencies (PEP 621)
+- `requirements.txt` - used for development/local installation (`pip install -r requirements.txt`)
+
+**Both files must have the same dependencies with the same version constraints.**
+
+**Note:** `setup.py` is minimal and only used for `data_files` (systemd service + example config). Package metadata comes from `pyproject.toml`.
+
+## Configuration
+
+- Pydantic models for validation
+- YAML format with comments
+- Environment variable: `CONFIG_PATH` for config file location
+- Never commit `config.yaml` (contains Trello key/token)
+
+## Quick Checklist
+
+- [ ] **Virtual environment activated** (`source venv/bin/activate`)
+- [ ] All functions typed
+- [ ] All times UTC
+- [ ] Result objects for errors (not exceptions)
+- [ ] Dependency injection for testability
+- [ ] No SMS content or secrets in logs
+- [ ] Graceful degradation (modem/Trello errors don't crash the daemon)
+- [ ] Docstrings for public functions
+- [ ] Code formatted and linted (in venv)
+- [ ] Unit tests checked and updated if needed (run `pytest` in venv to verify)
+- [ ] **Dependencies added to BOTH `requirements.txt` AND `pyproject.toml`**
+- [ ] **Features split into separate files** - avoid monolithic files with many concerns

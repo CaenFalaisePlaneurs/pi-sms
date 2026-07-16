@@ -1,0 +1,60 @@
+[project]
+name = "pi-sms"
+version = "0.1.0"
+description = "SMS-to-Trello daemon for Raspberry Pi with a Huawei E3372 HiLink modem"
+authors = [
+    {name = "Nicolas Massart"}
+]
+license = "MIT"
+license-files = ["LICENSE"]
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+    "apscheduler>=3.10.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.9.0",
+    "pyyaml>=6.0.1",
+]
+
+[project.scripts]
+pi-sms = "pi_sms.core.main:main"
+pi-sms-setup = "pi_sms.setup.setup:main"
+pi-sms-uninstall = "pi_sms.setup.uninstall:main"
+
+[tool.setuptools]
+packages = {find = {}}
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+ignore = ["E501"]
+per-file-ignores = {"__init__.py" = ["F401"]}
+
+[tool.black]
+line-length = 100
+target-version = ['py313']
+
+[tool.mypy]
+plugins = ["pydantic.mypy"]
+python_version = "3.13"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+addopts = "-v --cov=pi_sms --cov-report=term-missing"

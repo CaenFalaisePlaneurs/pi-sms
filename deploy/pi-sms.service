@@ -1,0 +1,20 @@
+[Unit]
+Description=SMS-to-Trello Daemon
+After=network.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=10
+User=pi
+Environment="CONFIG_PATH=/etc/pi-sms/config.yaml"
+ExecStart=/usr/bin/pi-sms
+TimeoutStopSec=30
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pi-sms
+
+[Install]
+WantedBy=multi-user.target
