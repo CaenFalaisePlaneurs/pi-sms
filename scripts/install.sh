@@ -34,7 +34,14 @@ python3 -m venv "${VENV_DIR}"
 
 echo "[3/4] Installing pi-sms from ${REPO_URL} (${BRANCH})..."
 "${VENV_DIR}/bin/pip" install --upgrade pip
-"${VENV_DIR}/bin/pip" install "git+${REPO_URL}@${BRANCH}"
+if "${VENV_DIR}/bin/pip" show pi-sms >/dev/null 2>&1; then
+  # Already installed: plain "pip install git+URL" treats a same-name package as
+  # satisfied and skips reinstalling, even when the underlying commit changed, so
+  # force a real reinstall to pick up new code. --no-deps skips unchanged dependencies.
+  "${VENV_DIR}/bin/pip" install --upgrade --force-reinstall --no-deps "git+${REPO_URL}@${BRANCH}"
+else
+  "${VENV_DIR}/bin/pip" install "git+${REPO_URL}@${BRANCH}"
+fi
 
 echo "[4/4] Running setup (requires root to write system files)..."
 sudo "${VENV_DIR}/bin/python" -m pi_sms.setup.setup
