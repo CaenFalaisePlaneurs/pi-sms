@@ -1,5 +1,5 @@
-"""Trello card creation."""
+"""Trello card creation and comment management."""
 
-from .trello import TrelloResult, create_card
+from .trello import TrelloCard, TrelloResult, add_comment, create_card, record_sms
 
-__all__ = ["TrelloResult", "create_card"]
+__all__ = ["TrelloCard", "TrelloResult", "add_comment", "create_card", "record_sms"]

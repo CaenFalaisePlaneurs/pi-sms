@@ -7,7 +7,7 @@ Trello failure leaves the message on the modem so the next poll retries it.
 
 from ..filter.filter import SmsFilter
 from ..modem.hilink import HilinkClient
-from ..trello.trello import create_card
+from ..trello.trello import record_sms
 from .config import Config
 from .debug import debug_print
 
@@ -44,13 +44,16 @@ async def poll_and_process(
                 await modem.delete_sms(message.index)
                 continue
 
-            result = await create_card(config.trello, message)
+            result = await record_sms(config.trello, message)
             if result.success:
-                print(f"Created Trello card for SMS from {message.phone}")
+                if result.action == "commented":
+                    print(f"Added SMS from {message.phone} to existing card")
+                else:
+                    print(f"Created Trello card for SMS from {message.phone}")
                 await modem.delete_sms(message.index)
             else:
                 debug_print(
-                    f"Failed to create Trello card for SMS from {message.phone}: {result.error}"
+                    f"Failed to record Trello card for SMS from {message.phone}: {result.error}"
                 )
                 # Leave the message on the modem so the next poll retries it.
     finally:

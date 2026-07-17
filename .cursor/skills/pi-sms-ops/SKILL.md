@@ -61,8 +61,9 @@ A successful send returns `<response>OK</response>`.
 sudo journalctl -u pi-sms -f
 ```
 
-Only card creations are logged in normal mode
-(`Created Trello card for SMS from {phone}`). For real-time flushing and full
+Only card creations and comments are logged in normal mode
+(`Created Trello card for SMS from {phone}` and
+`Added SMS from {phone} to existing card`). For real-time flushing and full
 visibility into every received/filtered message:
 
 ```bash

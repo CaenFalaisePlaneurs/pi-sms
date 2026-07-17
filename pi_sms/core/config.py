@@ -45,6 +45,11 @@ class TrelloConfig(BaseModel):
         "{content}",
         description="Template for the Trello card description, supports {phone}, {date}, {content}",
     )
+    card_comment_template: str = Field(
+        "{content}",
+        description="Template for comments added to an existing card for the same phone number, "
+        "supports {phone}, {date}, {content}",
+    )
 
 
 class DebugConfig(BaseModel):

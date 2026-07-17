@@ -16,7 +16,11 @@ filter:
   exclude_patterns:
     - '^Messagerie "666" Free:' # Free Mobile voicemail notification
 
-# Trello configuration: where to create a card for each kept SMS.
+# Trello configuration: one card per phone number, in the configured list.
+# The first SMS from a number creates a card; later SMS from the same number
+# are appended as comments on that card so it reads as a conversation.
+# Matching is done by phone number substring in the card name, so
+# card_name_template must include {phone}.
 # Create an API key at https://trello.com/power-ups/admin (or https://trello.com/app-key)
 # and a token by visiting the authorize URL it gives you.
 # The list_id is the destination Trello list ID (open the list menu > "..." > and
@@ -27,6 +31,7 @@ trello:
   list_id: "your-trello-list-id"
   card_name_template: "SMS from {phone}"
   card_desc_template: "{content}"
+  card_comment_template: "{content}"
 
 # Debug mode (for development/testing only)
 # Enable via DEBUG_MODE environment variable (DEBUG_MODE=true)

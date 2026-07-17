@@ -6,7 +6,7 @@ A Python 3.13 background service for Raspberry Pi that receives SMS via a Huawei
 
 - **SMS polling**: Regularly checks the E3372 HiLink modem's SMS inbox via its web API (no AT commands, no serial port)
 - **Pattern filtering**: Discards messages matching configured regex patterns (e.g. Free Mobile voicemail notifications) without creating a card
-- **Trello card creation**: One card per kept message, in a configured Trello list, via the Trello REST API
+- **Trello conversation cards**: One card per phone number, in a configured Trello list; the first SMS creates the card and later SMS from the same number are appended as comments
 - **Self-cleaning inbox**: Each message is deleted from the modem once handled (card created, or filtered out) so the modem's limited SMS storage never fills up; a Trello failure leaves the message for the next poll to retry
 - **Isolated modem networking**: Setup provisions a static, never-default network profile for the modem's USB interface, bound by MAC address so it's reachable on every boot without ever disrupting the Pi's LAN connection
 - **Systemd service**: Auto-start, auto-restart, journald logging
@@ -25,9 +25,12 @@ flowchart LR
   sched["Poll every N seconds"] --> list["List SMS inbox (HiLink API)"]
   list --> filt{"Matches exclude pattern?"}
   filt -->|"yes"| del1["Delete from modem"]
-  filt -->|"no"| card["Create Trello card"]
-  card -->|"success"| del2["Delete from modem"]
-  card -->|"failure"| retry["Leave on modem, retry next poll"]
+  filt -->|"no"| find{"Open card for this phone number?"}
+  find -->|"yes"| comment["Add SMS as a comment"]
+  find -->|"no"| card["Create Trello card"]
+  comment --> del2["Delete from modem"]
+  card --> del2
+  find -->|"lookup failed"| retry["Leave on modem, retry next poll"]
 ```
 
 The E3372 in HiLink mode presents itself as a USB network card (typically `eth1`) hosting a web API at `http://192.168.8.1`. There is no `/dev/ttyUSB*` device and no AT command interface. Every state-changing API call (listing or deleting SMS) requires a fresh session token fetched immediately beforehand from `/api/webserver/SesTokInfo` (a CSRF-style flow).
@@ -117,7 +120,9 @@ See [config.example.yaml](config.example.yaml) for all configuration options, in
 - `modem`: base URL and request timeout for the HiLink API
 - `poll`: how often to check the inbox
 - `filter`: regex patterns for messages to discard without a card
-- `trello`: API key/token, destination list, and card title/description templates
+- `trello`: API key/token, destination list, and card title/description/comment templates
+
+Card-to-phone matching is a substring check against the card name, so `card_name_template` must include `{phone}` for the one-card-per-number behavior to work.
 - `debug`: faster poll interval when `DEBUG_MODE=true`
 
 ## Service Management
@@ -139,7 +144,7 @@ sudo journalctl -u pi-sms -n 50
 
 sudo journalctl -u pi-sms -f
 
-In normal mode, only card creations are logged (`Created Trello card for SMS from {phone}`); everything else (inbox poll counts, filtered messages, Trello failures) is silent. Two things affect what you see:
+In normal mode, only card creations and comments are logged (`Created Trello card for SMS from {phone}` and `Added SMS from {phone} to existing card`); everything else (inbox poll counts, filtered messages, Trello failures) is silent. Two things affect what you see:
 
 - The daemon is line-buffered by Python but journald only flushes on buffer boundaries, so `-f` can appear to lag in bursts rather than truly live. To force unbuffered output, add an override:
 
@@ -205,9 +210,11 @@ then use the returned `SesInfo`/`TokInfo` to call `/api/monitoring/status` with 
 
 ## Development
 
+```shell
 source venv/bin/activate  # after scripts/setup-venv.sh
 pip install -r requirements-dev.txt
 ruff check pi_sms tests && black --check pi_sms tests && mypy pi_sms && pytest tests/
+```
 
 Or use the Cursor commands `/quality-check` and `/quality-fix`.
 

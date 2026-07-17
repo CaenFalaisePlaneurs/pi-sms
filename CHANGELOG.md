@@ -5,6 +5,7 @@
 ### Added
 
 - One-command installer (`scripts/install.sh`) that installs base tools, creates a virtual environment, installs the package from GitHub, and runs setup non-interactively
+- One Trello card per phone number: the first SMS from a number creates a card, and later SMS from the same number are appended as comments, so a card reads as a conversation thread (configurable via the new `trello.card_comment_template`)
 
 ### Changed
 

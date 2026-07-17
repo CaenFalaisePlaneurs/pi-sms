@@ -8,7 +8,9 @@ import pytest
 from pi_sms.setup import network
 
 
-def _completed(stdout: str = "", returncode: int = 0, stderr: str = "") -> subprocess.CompletedProcess[str]:
+def _completed(
+    stdout: str = "", returncode: int = 0, stderr: str = ""
+) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
 
 
@@ -22,7 +24,9 @@ def test_default_route_interface_parses_dev(monkeypatch: pytest.MonkeyPatch) -> 
     assert network._default_route_interface() == "eth0"
 
 
-def test_default_route_interface_returns_none_without_route(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_route_interface_returns_none_without_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(network, "_run", lambda args: _completed("", returncode=1))
 
     assert network._default_route_interface() is None

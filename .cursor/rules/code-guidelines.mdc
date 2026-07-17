@@ -93,8 +93,8 @@ Use dependency injection for external dependencies (HTTP clients, subprocess cal
 
 ## Logging
 
-- **Only lifecycle events**: start/stop, first modem connection, poll results, card created, message deleted, schedule/config errors
-- **Format**: `"Created Trello card for SMS from {phone}"`
+- **Only lifecycle events**: start/stop, first modem connection, poll results, card created, comment added to existing card, message deleted, schedule/config errors
+- **Format**: `"Created Trello card for SMS from {phone}"`, `"Added SMS from {phone} to existing card"`
 - **Never log full SMS content or Trello token/key** - redact with `***` if needed
 
 ## Module Structure
@@ -124,6 +124,12 @@ except ImportError:
 - The E3372 HiLink CSRF flow requires fetching `SesTokInfo` before **every** state-changing request (list/delete SMS): the `SessionID` cookie and `__RequestVerificationToken` header must come from the same fetch and are single-use for POST requests
 - Never hardcode the modem base URL in business logic - it comes from config (`modem.base_url`, default `http://192.168.8.1`)
 - Treat modem errors (no SIM, no signal, timeout) as recoverable - log and retry next poll, never crash the daemon
+
+### Trello Conversation Cards
+
+- One card per phone number: match an existing open card in the configured list by checking if the phone number is a substring of the card name, then append the SMS as a comment; otherwise create a new card
+- Card-to-phone matching requires `card_name_template` to include `{phone}`
+- Treat a card-lookup failure as recoverable - return `success=False` so the caller leaves the SMS on the modem and retries next poll, never create a card without first confirming no existing card matches (avoids duplicate cards for the same number)
 
 ### Async Operations
 
