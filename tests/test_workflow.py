@@ -4,22 +4,25 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from pi_sms.core.config import Config, TrelloConfig
+from pi_sms.core.config import Config, MmsConfig, TrelloConfig
 from pi_sms.core.workflow import poll_and_process
 from pi_sms.filter.filter import SmsFilter
 from pi_sms.modem.hilink import HilinkResult
 from pi_sms.modem.sms import SmsMessage
 from pi_sms.trello.trello import TrelloResult
 
+_MMS_REPLY_TEXT = "Please resend as plain text"
+
 
 def _config() -> Config:
     return Config(
         trello=TrelloConfig(key="k", token="t", list_id="l"),
+        mms=MmsConfig(reply_text=_MMS_REPLY_TEXT),
     )
 
 
-def _message(index: str, content: str = "Hello") -> SmsMessage:
-    return SmsMessage(index=index, phone="+33600000000", content=content, date="d", smstat="0")
+def _message(index: str, content: str = "Hello", phone: str = "+33600000000") -> SmsMessage:
+    return SmsMessage(index=index, phone=phone, content=content, date="d", smstat="0")
 
 
 @pytest.mark.asyncio
@@ -113,3 +116,84 @@ async def test_poll_and_process_handles_empty_inbox() -> None:
 
     modem.delete_sms.assert_not_awaited()
     assert is_running_ref["value"] is False
+
+
+@pytest.mark.asyncio
+async def test_poll_and_process_sends_mms_auto_reply_and_deletes_on_success() -> None:
+    modem = AsyncMock()
+    modem.list_inbox.return_value = [_message("1", content="")]
+    modem.send_sms.return_value = HilinkResult(success=True)
+    modem.delete_sms.return_value = HilinkResult(success=True)
+    sms_filter = SmsFilter(exclude_patterns=[])
+    is_running_ref = {"value": False}
+
+    with patch("pi_sms.core.workflow.record_sms", new=AsyncMock()) as mock_record_sms:
+        await poll_and_process(_config(), modem, sms_filter, is_running_ref)
+
+    modem.send_sms.assert_awaited_once_with("+33600000000", _MMS_REPLY_TEXT)
+    modem.delete_sms.assert_awaited_once_with("1")
+    mock_record_sms.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_poll_and_process_leaves_mms_on_modem_when_reply_fails() -> None:
+    modem = AsyncMock()
+    modem.list_inbox.return_value = [_message("1", content="")]
+    modem.send_sms.return_value = HilinkResult(success=False, error="boom")
+    sms_filter = SmsFilter(exclude_patterns=[])
+    is_running_ref = {"value": False}
+
+    await poll_and_process(_config(), modem, sms_filter, is_running_ref)
+
+    modem.delete_sms.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_poll_and_process_deletes_mms_from_non_replyable_sender_without_reply() -> None:
+    modem = AsyncMock()
+    modem.list_inbox.return_value = [_message("1", content="", phone="Free")]
+    modem.delete_sms.return_value = HilinkResult(success=True)
+    sms_filter = SmsFilter(exclude_patterns=[])
+    is_running_ref = {"value": False}
+
+    with patch("pi_sms.core.workflow.record_sms", new=AsyncMock()) as mock_record_sms:
+        await poll_and_process(_config(), modem, sms_filter, is_running_ref)
+
+    modem.send_sms.assert_not_awaited()
+    modem.delete_sms.assert_awaited_once_with("1")
+    mock_record_sms.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_poll_and_process_mms_detection_takes_precedence_over_filter() -> None:
+    modem = AsyncMock()
+    modem.list_inbox.return_value = [_message("1", content="")]
+    modem.send_sms.return_value = HilinkResult(success=True)
+    modem.delete_sms.return_value = HilinkResult(success=True)
+    # A pattern that would match empty content if the filter ran first.
+    sms_filter = SmsFilter(exclude_patterns=[".*"])
+    is_running_ref = {"value": False}
+
+    await poll_and_process(_config(), modem, sms_filter, is_running_ref)
+
+    modem.send_sms.assert_awaited_once_with("+33600000000", _MMS_REPLY_TEXT)
+
+
+@pytest.mark.asyncio
+async def test_poll_and_process_skips_mms_handling_when_disabled() -> None:
+    modem = AsyncMock()
+    modem.list_inbox.return_value = [_message("1", content="")]
+    modem.delete_sms.return_value = HilinkResult(success=True)
+    sms_filter = SmsFilter(exclude_patterns=[])
+    is_running_ref = {"value": False}
+    config = _config()
+    config.mms.enabled = False
+
+    with patch(
+        "pi_sms.core.workflow.record_sms",
+        new=AsyncMock(return_value=TrelloResult(success=True, card_id="c1", action="created")),
+    ):
+        await poll_and_process(config, modem, sms_filter, is_running_ref)
+
+    modem.send_sms.assert_not_awaited()
+    modem.delete_sms.assert_awaited_once_with("1")

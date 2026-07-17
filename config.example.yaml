@@ -16,6 +16,19 @@ filter:
   exclude_patterns:
     - '^Messagerie "666" Free:' # Free Mobile voicemail notification
 
+# MMS auto-reply: the modem cannot retrieve MMS content, so an incoming MMS
+# is detected (empty content from a real sender number) and answered with a
+# reply asking the sender to resend as plain text or by email. No Trello
+# card is created for the MMS itself; a plain-text follow-up creates one
+# through the normal flow. Senders that cannot be replied to (alphanumeric
+# IDs, short codes) are silently discarded.
+mms:
+  enabled: true
+  reply_text: >-
+    Ce numéro ne prend pas en charge les MMS (images, pièces jointes).
+    Merci de nous envoyer votre message en texte simple ou par email à
+    contact@caenfalaiseplaneurs.fr
+
 # Trello configuration: one card per phone number, in the configured list.
 # The first SMS from a number creates a card; later SMS from the same number
 # are appended as comments on that card so it reads as a conversation.

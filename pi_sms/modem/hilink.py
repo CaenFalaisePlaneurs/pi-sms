@@ -10,6 +10,8 @@ import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from xml.sax.saxutils import escape
 
 import httpx
 
@@ -130,6 +132,38 @@ class HilinkClient:
             try:
                 response = await client.post(
                     f"{self._base_url}/api/sms/delete-sms",
+                    headers=session.headers,
+                    content=body,
+                    timeout=self._timeout_seconds,
+                )
+                response.raise_for_status()
+            except httpx.HTTPError as e:
+                return HilinkResult(success=False, error=str(e))
+
+            if "<response>OK</response>" in response.text:
+                return HilinkResult(success=True)
+            return HilinkResult(success=False, error=response.text.strip())
+
+    async def send_sms(self, phone: str, content: str) -> HilinkResult:
+        """Send an SMS to a phone number via the modem."""
+        async with self._http_client() as client:
+            session = await self._fetch_session(client)
+            if session is None:
+                return HilinkResult(success=False, error="Could not obtain HiLink session token")
+
+            escaped_content = escape(content)
+            date = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
+            body = (
+                "<?xml version='1.0' encoding='UTF-8'?>"
+                "<request><Index>-1</Index>"
+                f"<Phones><Phone>{escape(phone)}</Phone></Phones>"
+                f"<Sca></Sca><Content>{escaped_content}</Content>"
+                f"<Length>{len(content)}</Length><Reserved>1</Reserved>"
+                f"<Date>{date}</Date></request>"
+            )
+            try:
+                response = await client.post(
+                    f"{self._base_url}/api/sms/send-sms",
                     headers=session.headers,
                     content=body,
                     timeout=self._timeout_seconds,

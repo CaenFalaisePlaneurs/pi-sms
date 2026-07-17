@@ -94,3 +94,49 @@ async def test_delete_sms_no_session_token() -> None:
 
     assert result.success is False
     assert result.error == "Could not obtain HiLink session token"
+
+
+@pytest.mark.asyncio
+async def test_send_sms_success() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/webserver/SesTokInfo":
+            return httpx.Response(200, text=_SES_TOK_RESPONSE)
+        if request.url.path == "/api/sms/send-sms":
+            assert b"<Phone>+33612345678</Phone>" in request.content
+            assert b"<Content>Hello there</Content>" in request.content
+            return httpx.Response(200, text="<response>OK</response>")
+        raise AssertionError(f"Unexpected request to {request.url.path}")
+
+    client = _client_with_handler(httpx.MockTransport(handler))
+
+    result = await client.send_sms("+33612345678", "Hello there")
+
+    assert result.success is True
+
+
+@pytest.mark.asyncio
+async def test_send_sms_failure_response() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/webserver/SesTokInfo":
+            return httpx.Response(200, text=_SES_TOK_RESPONSE)
+        return httpx.Response(200, text="<error><code>125002</code></error>")
+
+    client = _client_with_handler(httpx.MockTransport(handler))
+
+    result = await client.send_sms("+33612345678", "Hello there")
+
+    assert result.success is False
+    assert result.error is not None
+
+
+@pytest.mark.asyncio
+async def test_send_sms_no_session_token() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
+
+    client = _client_with_handler(httpx.MockTransport(handler))
+
+    result = await client.send_sms("+33612345678", "Hello there")
+
+    assert result.success is False
+    assert result.error == "Could not obtain HiLink session token"

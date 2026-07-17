@@ -52,6 +52,24 @@ class TrelloConfig(BaseModel):
     )
 
 
+class MmsConfig(BaseModel):
+    """MMS auto-reply configuration.
+
+    The E3372 HiLink modem cannot retrieve MMS content; an incoming MMS
+    surfaces in the inbox as a message with an empty Content but a valid
+    sender Phone. When detected, we reply with a message telling the sender
+    to resend as plain text instead.
+    """
+
+    enabled: bool = Field(True, description="Whether to auto-reply to detected MMS")
+    reply_text: str = Field(
+        "Ce numéro ne prend pas en charge les MMS (images, pièces jointes). "
+        "Merci de nous envoyer votre message en texte simple ou par email à "
+        "contact@caenfalaiseplaneurs.fr",
+        description="Auto-reply SMS sent to the sender of a detected MMS",
+    )
+
+
 class DebugConfig(BaseModel):
     """Debug configuration for development/testing.
 
@@ -68,6 +86,7 @@ class Config(BaseModel):
     modem: ModemConfig = Field(default_factory=ModemConfig)
     poll: PollConfig = Field(default_factory=PollConfig)
     filter: FilterConfig = Field(default_factory=FilterConfig)
+    mms: MmsConfig = Field(default_factory=MmsConfig)
     trello: TrelloConfig
     debug: DebugConfig | None = Field(None, description="Optional debug configuration")
 

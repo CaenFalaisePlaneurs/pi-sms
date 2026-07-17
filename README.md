@@ -6,6 +6,7 @@ A Python 3.13 background service for Raspberry Pi that receives SMS via a Huawei
 
 - **SMS polling**: Regularly checks the E3372 HiLink modem's SMS inbox via its web API (no AT commands, no serial port)
 - **Pattern filtering**: Discards messages matching configured regex patterns (e.g. Free Mobile voicemail notifications) without creating a card
+- **MMS auto-reply**: The modem cannot retrieve MMS content, so an incoming MMS is detected (empty content from a real sender number) and answered with an SMS asking the sender to resend as plain text or by email; no Trello card is created for the MMS itself
 - **Trello conversation cards**: One card per phone number, in a configured Trello list; the first SMS creates the card and later SMS from the same number are appended as comments
 - **Self-cleaning inbox**: Each message is deleted from the modem once handled (card created, or filtered out) so the modem's limited SMS storage never fills up; a Trello failure leaves the message for the next poll to retry
 - **Isolated modem networking**: Setup provisions a static, never-default network profile for the modem's USB interface, bound by MAC address so it's reachable on every boot without ever disrupting the Pi's LAN connection
@@ -23,7 +24,10 @@ A Python 3.13 background service for Raspberry Pi that receives SMS via a Huawei
 ```mermaid
 flowchart LR
   sched["Poll every N seconds"] --> list["List SMS inbox (HiLink API)"]
-  list --> filt{"Matches exclude pattern?"}
+  list --> mms{"Empty content (MMS)?"}
+  mms -->|"yes, replyable sender"| reply["Send auto-reply SMS"] --> del0["Delete from modem"]
+  mms -->|"yes, non-replyable sender"| del0
+  mms -->|"no"| filt{"Matches exclude pattern?"}
   filt -->|"yes"| del1["Delete from modem"]
   filt -->|"no"| find{"Open card for this phone number?"}
   find -->|"yes"| comment["Add SMS as a comment"]
@@ -32,6 +36,8 @@ flowchart LR
   card --> del2
   find -->|"lookup failed"| retry["Leave on modem, retry next poll"]
 ```
+
+MMS content cannot be retrieved via the HiLink API: an incoming MMS shows up as an inbox message with empty content but a real sender number. When detected, a configurable auto-reply SMS is sent asking the sender to resend as plain text or by email, then the message is deleted; senders that cannot receive a reply (alphanumeric IDs, short codes) are discarded without a reply. No Trello card is created for an MMS itself, so a plain-text follow-up from the sender is what creates or comments on their card.
 
 The E3372 in HiLink mode presents itself as a USB network card (typically `eth1`) hosting a web API at `http://192.168.8.1`. There is no `/dev/ttyUSB*` device and no AT command interface. Every state-changing API call (listing or deleting SMS) requires a fresh session token fetched immediately beforehand from `/api/webserver/SesTokInfo` (a CSRF-style flow).
 
@@ -120,6 +126,7 @@ See [config.example.yaml](config.example.yaml) for all configuration options, in
 - `modem`: base URL and request timeout for the HiLink API
 - `poll`: how often to check the inbox
 - `filter`: regex patterns for messages to discard without a card
+- `mms`: whether to auto-reply to detected MMS, and the reply text
 - `trello`: API key/token, destination list, and card title/description/comment templates
 
 Card-to-phone matching is a substring check against the card name, so `card_name_template` must include `{phone}` for the one-card-per-number behavior to work.
@@ -144,7 +151,7 @@ sudo journalctl -u pi-sms -n 50
 
 sudo journalctl -u pi-sms -f
 
-In normal mode, only card creations and comments are logged (`Created Trello card for SMS from {phone}` and `Added SMS from {phone} to existing card`); everything else (inbox poll counts, filtered messages, Trello failures) is silent. Two things affect what you see:
+In normal mode, only card creations, comments, and MMS auto-replies are logged (`Created Trello card for SMS from {phone}`, `Added SMS from {phone} to existing card`, and `Sent MMS auto-reply to {phone}`); everything else (inbox poll counts, filtered messages, Trello failures) is silent. Two things affect what you see:
 
 - The daemon is line-buffered by Python but journald only flushes on buffer boundaries, so `-f` can appear to lag in bursts rather than truly live. To force unbuffered output, add an override:
 

@@ -1,6 +1,6 @@
 """Tests for pi_sms.modem.sms XML parsing."""
 
-from pi_sms.modem.sms import parse_sms_list
+from pi_sms.modem.sms import SmsMessage, is_mms, is_replyable_sender, parse_sms_list
 
 _TWO_MESSAGE_RESPONSE = """<?xml version="1.0" encoding="UTF-8"?>
 <response>
@@ -56,3 +56,39 @@ def test_parse_sms_list_skips_message_without_index() -> None:
     xml_text = "<response><Messages><Message><Phone>1</Phone></Message></Messages></response>"
 
     assert parse_sms_list(xml_text) == []
+
+
+def _message(content: str, phone: str = "+33612345678") -> SmsMessage:
+    return SmsMessage(index="1", phone=phone, content=content, date="d", smstat="0")
+
+
+def test_is_mms_true_for_empty_content() -> None:
+    assert is_mms(_message("")) is True
+
+
+def test_is_mms_true_for_whitespace_only_content() -> None:
+    assert is_mms(_message("   ")) is True
+
+
+def test_is_mms_false_for_text_content() -> None:
+    assert is_mms(_message("Hello there")) is False
+
+
+def test_is_replyable_sender_true_for_e164_number() -> None:
+    assert is_replyable_sender("+33612345678") is True
+
+
+def test_is_replyable_sender_true_for_plain_digits() -> None:
+    assert is_replyable_sender("0612345678") is True
+
+
+def test_is_replyable_sender_false_for_alphanumeric_sender_id() -> None:
+    assert is_replyable_sender("Free") is False
+
+
+def test_is_replyable_sender_false_for_empty_phone() -> None:
+    assert is_replyable_sender("") is False
+
+
+def test_is_replyable_sender_false_for_short_code() -> None:
+    assert is_replyable_sender("666") is False
