@@ -1,0 +1,29 @@
+---
+description: Invariants for the E3372 modem NetworkManager provisioning
+globs: pi_sms/setup/network.py
+alwaysApply: false
+---
+
+# Modem Networking Invariants
+
+The onboard NIC and the Huawei E3372 are both USB-attached ethernet devices,
+so `eth0`/`eth1` naming can differ on every boot.
+
+- **Never** bring the modem interface up with plain DHCP (`nmcli device
+  connect <modem-iface>`). If that interface wins the boot-time naming race,
+  its own DHCP server hands out a lease and hijacks the Pi's default route,
+  dropping the Pi off the LAN.
+- Bind connections by **MAC address**, not interface name, so activation is
+  deterministic regardless of naming:
+  - Detect the modem via its USB vendor ID (`12d1`, see `_HUAWEI_USB_VENDOR_ID`).
+  - Detect the LAN NIC via the current default route (`_default_route_interface`).
+- Modem connection (`pi-sms-modem`) invariants — do not change without a
+  reason documented here:
+  - `ipv4.method manual`, static `192.168.8.100/24`
+  - `ipv4.never-default yes`, `ipv6.method disabled`
+  - `connection.autoconnect yes`
+- MAC-pinning via `nmcli connection modify` is non-disruptive: it only
+  decides where a profile lands on the *next* activation/boot, so it is safe
+  to run over an active SSH session without dropping the connection.
+- Keep `ensure_modem_network()` idempotent: safe to re-run on every install
+  or setup invocation without duplicating connections.
