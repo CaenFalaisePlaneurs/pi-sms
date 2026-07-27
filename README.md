@@ -8,7 +8,7 @@ A Python 3.13 background service for Raspberry Pi that receives SMS via a Huawei
 - **Pattern filtering**: Discards messages matching configured regex patterns (e.g. Free Mobile voicemail notifications) without creating a card
 - **MMS auto-reply**: The modem cannot retrieve MMS content, so an incoming MMS is detected (empty content from a real sender number) and answered with an SMS asking the sender to resend as plain text or by email; no Trello card is created for the MMS itself
 - **Trello conversation cards**: One card per phone number, in a configured Trello list; the first SMS creates the card and later SMS from the same number are appended as comments
-- **Reply from Trello**: A team member replies to a conversation by writing a comment with a trigger marker; the daemon sends the text after it as an SMS to the card's phone number and tags the comment as sent (or as pending retry on failure)
+- **Reply from Trello**: A team member replies to a conversation by writing a comment with a trigger marker; the daemon sends the text after it as an SMS to the card's phone number and posts a new status comment confirming it (or noting a pending retry on failure), regardless of which Trello login wrote the reply
 - **Self-cleaning inbox**: Each message is deleted from the modem once handled (card created, or filtered out) so the modem's limited SMS storage never fills up; a Trello failure leaves the message for the next poll to retry
 - **Isolated modem networking**: Setup provisions a static, never-default network profile for the modem's USB interface, bound by MAC address so it's reachable on every boot without ever disrupting the Pi's LAN connection
 - **Systemd service**: Auto-start, auto-restart, journald logging
@@ -44,7 +44,7 @@ The E3372 in HiLink mode presents itself as a USB network card (typically `eth1`
 
 ## Replying to an SMS from Trello
 
-Since every team member authenticates to Trello with the same account, replies are driven by a text convention in the comment rather than by who wrote it. To reply to a conversation, add a comment on its card containing the trigger (`>>RE:` by default):
+Replies are driven by a text convention in the comment, so they work no matter which Trello login wrote the comment. To reply to a conversation, add a comment on its card containing the trigger (`>>RE:` by default):
 
 ```
 Nico - pas de reponse a ce jour, je renvoie un sms
@@ -53,29 +53,33 @@ Ou preferez vous un remboursement?
 Merci.
 ```
 
-Everything before the trigger is free-form attribution or notes, kept only in Trello. Everything after it (internal newlines preserved) is sent verbatim as the SMS to the number in the card's title. On the next reply poll, the daemon sends the SMS and appends a tag to the comment:
+Everything before the trigger is free-form attribution or notes, kept only in Trello. Everything after it (internal newlines preserved) is sent verbatim as the SMS to the number in the card's title. On the next reply poll, the daemon sends the SMS and posts a new status comment:
 
 ```
-[Réponse envoyée le 17/07/2026 a 12:26]
+[Réponse envoyée le 17/07/2026 a 12:26] (réf: 66f...)
 ```
 
-so the comment is never resent and the team sees confirmation directly on the card. If the send fails (no signal, no SIM), the comment is tagged instead with a retry notice reflecting `reply.poll_interval_seconds`:
+The `(réf: ...)` suffix references the original comment so it is never resent, and the team sees confirmation directly on the card. Trello only lets the original author of a comment edit it, so status is always recorded as a *new* comment rather than by editing the reply comment itself - this way it works even when a reply is written from a personal Trello login rather than a shared one. If the send fails (no signal, no SIM), a failure notice is posted once:
 
 ```
-[Echec d'envoi, nouvel essai dans 30 s]
+[Echec d'envoi, nouvelle tentative en cours] (réf: 66f...)
 ```
 
-and retried on every following poll until it succeeds. Comments that already carry the sent tag, or that never contained the trigger, are ignored.
+and the SMS send is retried silently on every following poll until it succeeds, without posting further notices. Comments already confirmed as sent, or that never contained the trigger, are ignored.
 
 ```mermaid
 flowchart LR
   sched2["Poll every N seconds"] --> cards["List open cards"]
   cards --> comments["List comments per card"]
-  comments --> trig{"Contains trigger,\nnot already sent?"}
+  comments --> trig{"Contains trigger?"}
   trig -->|"no"| ignore["Ignore"]
-  trig -->|"yes"| send["Send SMS body via modem"]
-  send -->|"success"| tagok["Tag comment: sent"]
-  send -->|"failure"| tagfail["Tag comment: retry pending"]
+  trig -->|"yes"| sent{"Sent confirmation\nalready posted?"}
+  sent -->|"yes"| ignore
+  sent -->|"no"| send["Send SMS body via modem"]
+  send -->|"success"| postok["Post new comment: sent confirmation"]
+  send -->|"failure"| notice{"Failure notice\nalready posted?"}
+  notice -->|"no"| postfail["Post new comment: failure notice"]
+  notice -->|"yes"| silent["Retry silently next poll"]
 ```
 
 ## Installation
@@ -165,7 +169,7 @@ See [config.example.yaml](config.example.yaml) for all configuration options, in
 - `filter`: regex patterns for messages to discard without a card
 - `mms`: whether to auto-reply to detected MMS, and the reply text
 - `trello`: API key/token, destination list, and card title/description/comment templates
-- `reply`: trigger marker, reply poll interval, and sent/failure tag templates (see "Replying to an SMS from Trello" above)
+- `reply`: trigger marker, reply poll interval, and sent/failure status comment templates (see "Replying to an SMS from Trello" above)
 - `debug`: faster poll interval when `DEBUG_MODE=true`
 
 Card-to-phone matching is a substring check against the card name, so `card_name_template` must include `{phone}` for the one-card-per-number behavior to work.

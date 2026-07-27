@@ -78,8 +78,11 @@ class ReplyConfig(BaseModel):
     A team member replies to an SMS conversation by writing a comment on the
     card containing the trigger marker; everything after the marker (on the
     same or following lines) is sent as the SMS body, and anything before it
-    is left untouched as free-form attribution/notes. After a send attempt,
-    the comment is annotated in place so it is never resent.
+    is left untouched as free-form attribution/notes. Trello only lets the
+    original author of a comment edit it, and replies may come from any team
+    member, so after a send attempt the daemon posts a *new* comment (always
+    postable by its own token) referencing the trigger comment's ID, instead
+    of editing the trigger comment itself.
     """
 
     enabled: bool = Field(True, description="Whether to poll Trello comments for SMS replies")
@@ -94,19 +97,19 @@ class ReplyConfig(BaseModel):
     )
     sent_marker: str = Field(
         "[Réponse envoyée",
-        description="Substring identifying a comment whose reply has already been sent",
+        description="Substring identifying a status comment recording a sent reply",
     )
     sent_tag_template: str = Field(
         "[Réponse envoyée le {date} a {time}]",
-        description="Tag appended to a comment once its reply SMS is sent, supports {date}, {time}",
+        description="Posted as a new comment once a reply SMS is sent, supports {date}, {time}",
     )
     failure_marker: str = Field(
         "[Echec d'envoi",
-        description="Substring identifying a comment with a pending send failure tag",
+        description="Substring identifying a status comment recording a send failure",
     )
     failure_tag_template: str = Field(
-        "[Echec d'envoi, nouvel essai dans {delay}]",
-        description="Tag appended to a comment when the SMS send fails, supports {delay}",
+        "[Echec d'envoi, nouvelle tentative en cours]",
+        description="Posted as a new comment (once) when a reply SMS fails to send",
     )
 
 

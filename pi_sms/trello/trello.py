@@ -147,8 +147,33 @@ async def add_comment(
     text = config.card_comment_template.format(
         phone=message.phone, date=message.date, content=message.content
     )
-    params = {"key": config.key, "token": config.token, "text": text}
+    return await post_comment(config, card_id, text, client)
 
+
+async def post_comment(
+    config: TrelloConfig,
+    card_id: str,
+    text: str,
+    client: httpx.AsyncClient | None = None,
+) -> TrelloResult:
+    """Add a new comment with arbitrary text to a Trello card.
+
+    Posting a new comment is always permitted for the daemon's own token,
+    unlike editing an existing one (which the Trello API restricts to the
+    original author) - this is how reply status notices are recorded without
+    needing to touch a comment written by a team member.
+
+    Args:
+        config: Trello configuration (key, token)
+        card_id: Trello card ID to comment on
+        text: Comment body
+        client: Optional pre-configured httpx.AsyncClient (for tests); when
+            provided, it is reused and not closed by this function.
+
+    Returns:
+        TrelloResult with action="commented" on success
+    """
+    params = {"key": config.key, "token": config.token, "text": text}
     if client is not None:
         return await _post_comment(client, card_id, params)
     async with httpx.AsyncClient() as new_client:
@@ -285,56 +310,6 @@ async def _list_card_comments(
     return comments, None
 
 
-async def update_comment(
-    config: TrelloConfig,
-    comment_id: str,
-    text: str,
-    client: httpx.AsyncClient | None = None,
-) -> TrelloResult:
-    """Update the text of an existing comment (commentCard action).
-
-    Only the author of a comment can edit it via the Trello API; since the
-    daemon and every team member authenticate as the same Trello token, the
-    daemon can always edit its own reply comments to mark them as sent.
-
-    Args:
-        config: Trello configuration (key, token)
-        comment_id: Trello action ID of the comment to update
-        text: New comment text
-        client: Optional pre-configured httpx.AsyncClient (for tests); when
-            provided, it is reused and not closed by this function.
-
-    Returns:
-        TrelloResult with action="updated" on success
-    """
-    params = {"key": config.key, "token": config.token, "text": text}
-    if client is not None:
-        return await _put_comment(client, comment_id, params)
-    async with httpx.AsyncClient() as new_client:
-        return await _put_comment(new_client, comment_id, params)
-
-
-async def _put_comment(
-    client: httpx.AsyncClient, comment_id: str, params: dict[str, str]
-) -> TrelloResult:
-    try:
-        response = await client.put(
-            f"{_TRELLO_API_BASE_URL}/actions/{comment_id}",
-            params=params,
-            timeout=15,
-        )
-        response.raise_for_status()
-    except httpx.HTTPStatusError as e:
-        status_code = e.response.status_code
-        retry_after = _rate_limit_backoff_seconds(e.response) if status_code == 429 else None
-        return TrelloResult(
-            success=False, error=str(e), status_code=status_code, retry_after_seconds=retry_after
-        )
-    except httpx.HTTPError as e:
-        return TrelloResult(success=False, error=str(e))
-    return TrelloResult(success=True, action="updated")
-
-
 def _rate_limit_backoff_seconds(response: httpx.Response) -> float:
     """Determine how long to wait before retrying a 429 response.
 
@@ -393,6 +368,12 @@ async def _post_comment(
             timeout=15,
         )
         response.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        status_code = e.response.status_code
+        retry_after = _rate_limit_backoff_seconds(e.response) if status_code == 429 else None
+        return TrelloResult(
+            success=False, error=str(e), status_code=status_code, retry_after_seconds=retry_after
+        )
     except httpx.HTTPError as e:
         return TrelloResult(success=False, error=str(e))
     return TrelloResult(success=True, card_id=card_id, action="commented")

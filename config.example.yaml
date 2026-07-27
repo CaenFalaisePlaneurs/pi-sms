@@ -50,27 +50,24 @@ trello:
 # comment on the card containing the trigger below. Text before the trigger
 # is free-form attribution/notes kept only in Trello; text after it (with
 # internal newlines preserved) is sent verbatim as the SMS to the number in
-# the card name. After a send attempt, the comment is annotated in place so
-# it is never resent, and can be edited since every team member authenticates
-# with the same Trello token as the daemon:
+# the card name. Trello only lets the original author of a comment edit it,
+# and a reply may be written from any team member's own Trello login, so
+# status is recorded as a *new* comment referencing the reply, not by
+# editing the reply itself - this works regardless of who wrote it:
 #
 #   Nico - pas de reponse a ce jour, je renvoie un sms
 #   >>RE: Etes vous toujours interessé?
 #   Ou preferez vous un remboursement?
 #   Merci.
 #
-# becomes, once sent:
+# once sent, a new comment is posted on the card:
 #
-#   Nico - pas de reponse a ce jour, je renvoie un sms
-#   >>RE: Etes vous toujours interessé?
-#   Ou preferez vous un remboursement?
-#   Merci.
+#   [Réponse envoyée le 17/07/2026 a 12:26] (réf: 66f...)
 #
-#   [Réponse envoyée le 17/07/2026 a 12:26]
+# and, if the send fails, a one-time failure notice is posted instead, after
+# which the send is retried silently every poll until it succeeds:
 #
-# and, if the send fails, is retagged with a retry notice until it succeeds:
-#
-#   [Echec d'envoi, nouvel essai dans 30 s]
+#   [Echec d'envoi, nouvelle tentative en cours] (réf: 66f...)
 reply:
   enabled: true
   trigger: ">>RE:"
@@ -79,7 +76,7 @@ reply:
   sent_marker: "[Réponse envoyée"
   sent_tag_template: "[Réponse envoyée le {date} a {time}]"
   failure_marker: "[Echec d'envoi"
-  failure_tag_template: "[Echec d'envoi, nouvel essai dans {delay}]"
+  failure_tag_template: "[Echec d'envoi, nouvelle tentative en cours]"
 
 # Debug mode (for development/testing only)
 # Enable via DEBUG_MODE environment variable (DEBUG_MODE=true)

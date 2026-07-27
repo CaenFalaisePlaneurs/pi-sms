@@ -1,10 +1,12 @@
 """Trello-comment-driven SMS reply orchestration.
 
 Each poll: list open cards in the configured Trello list, then for every
-comment containing the reply trigger that has not already been marked as
-sent, extract the phone number from the card name and the SMS body from the
-comment, send it via the modem, and annotate the comment with a sent or
-failure tag so it is never resent and the team gets visible confirmation.
+comment containing the reply trigger that has no matching sent confirmation
+yet, extract the phone number from the card name and the SMS body from the
+comment, send it via the modem, and post a new status comment (sent or
+failure) referencing the trigger comment's ID. Status is recorded as a new
+comment rather than an edit because Trello only lets the original author of
+a comment edit it, and a reply may be written by any team member.
 """
 
 import asyncio
@@ -21,15 +23,21 @@ from ..trello.trello import (
     TrelloResult,
     list_card_comments,
     list_open_cards,
-    update_comment,
+    post_comment,
 )
-from .text import build_failure_text, build_sent_text, is_already_sent, parse_reply
+from .text import (
+    build_failure_notice,
+    build_sent_confirmation,
+    has_failure_notice,
+    is_reply_already_sent,
+    parse_reply,
+)
 
-# A successful SMS send followed by a failed Trello update would otherwise
-# leave the comment untagged, causing the same SMS to be resent to the
-# customer on the next poll; retrying the tag write a few times narrows that
-# window without requiring persistent local state.
-_UPDATE_COMMENT_ATTEMPTS = 5
+# Posting a new status comment is always permitted for the daemon's own
+# token, so failures here should be rare and transient; retrying a few times
+# with backoff narrows the (much smaller than before) window where an SMS
+# sends successfully but the confirmation never gets recorded.
+_POST_COMMENT_ATTEMPTS = 5
 _BASE_RETRY_DELAY_SECONDS = 2
 _MAX_RETRY_DELAY_SECONDS = 15
 
@@ -79,7 +87,7 @@ async def _poll_and_send_replies(
             continue
 
         for comment in comments:
-            await _process_comment(config, modem, client, card.name, comment)
+            await _process_comment(config, modem, client, card.name, card.id, comment, comments)
 
 
 async def _process_comment(
@@ -87,13 +95,15 @@ async def _process_comment(
     modem: HilinkClient,
     client: httpx.AsyncClient,
     card_name: str,
+    card_id: str,
     comment: TrelloComment,
+    comments: list[TrelloComment],
 ) -> None:
-    if is_already_sent(comment.text, config.reply):
-        return
-
     parsed = parse_reply(comment.text, config.reply.trigger, config.reply.case_insensitive)
     if parsed is None:
+        return
+
+    if is_reply_already_sent(comments, comment.id, config.reply):
         return
 
     phone = find_replyable_phone(card_name)
@@ -103,41 +113,43 @@ async def _process_comment(
 
     result = await modem.send_sms(phone, parsed.body)
     if result.success:
-        sent_text = build_sent_text(comment.text, config.reply, datetime.now().astimezone())
-        update_result = await _update_comment_with_retries(config, comment.id, sent_text, client)
-        if update_result.success:
+        confirmation = build_sent_confirmation(
+            comment.id, config.reply, datetime.now().astimezone()
+        )
+        post_result = await _post_status_comment_with_retries(config, card_id, confirmation, client)
+        if post_result.success:
             print(f"Sent SMS reply to {phone}")
         else:
             print(
-                f"Sent SMS reply to {phone} but failed to tag comment as sent after retries "
-                f"(next poll may resend): {update_result.error}"
+                f"Sent SMS reply to {phone} but failed to record sent confirmation after retries "
+                f"(next poll may resend): {post_result.error}"
             )
         return
 
     debug_print(f"Failed to send SMS reply to {phone}: {result.error}")
-    failure_text = build_failure_text(
-        comment.text, config.reply, config.reply.poll_interval_seconds
-    )
-    await _update_comment_with_retries(config, comment.id, failure_text, client)
+    if has_failure_notice(comments, comment.id, config.reply):
+        return
+    notice = build_failure_notice(comment.id, config.reply)
+    await _post_status_comment_with_retries(config, card_id, notice, client)
 
 
-async def _update_comment_with_retries(
+async def _post_status_comment_with_retries(
     config: Config,
-    comment_id: str,
+    card_id: str,
     text: str,
     client: httpx.AsyncClient,
 ) -> TrelloResult:
-    """Update a comment, retrying with backoff to reduce the odds of a transient failure.
+    """Post a status comment, retrying with backoff to reduce the odds of a transient failure.
 
     A 429 response's indicated cooldown (from `TrelloResult.retry_after_seconds`)
     is honored instead of the regular exponential backoff, since Trello tells
     us exactly how long to wait.
     """
-    result = await update_comment(config.trello, comment_id, text, client)
+    result = await post_comment(config.trello, card_id, text, client)
     attempt = 1
-    while not result.success and attempt < _UPDATE_COMMENT_ATTEMPTS:
+    while not result.success and attempt < _POST_COMMENT_ATTEMPTS:
         await asyncio.sleep(_retry_delay_seconds(result, attempt))
-        result = await update_comment(config.trello, comment_id, text, client)
+        result = await post_comment(config.trello, card_id, text, client)
         attempt += 1
     return result
 

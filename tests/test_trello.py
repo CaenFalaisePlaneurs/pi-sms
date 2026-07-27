@@ -11,8 +11,8 @@ from pi_sms.trello.trello import (
     find_card_id_for_phone,
     list_card_comments,
     list_open_cards,
+    post_comment,
     record_sms,
-    update_comment,
 )
 
 _MESSAGE = SmsMessage(
@@ -268,29 +268,28 @@ async def test_list_card_comments_http_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_comment_success() -> None:
+async def test_post_comment_success() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/1/actions/action-1"
-        assert request.method == "PUT"
+        assert request.url.path == "/1/cards/card-abc/actions/comments"
         assert request.url.params["text"] == "new text"
         return httpx.Response(200, json={"id": "action-1"})
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
-    result = await update_comment(_config(), "action-1", "new text", client=client)
+    result = await post_comment(_config(), "card-abc", "new text", client=client)
 
     assert result.success is True
-    assert result.action == "updated"
+    assert result.action == "commented"
 
 
 @pytest.mark.asyncio
-async def test_update_comment_http_error() -> None:
+async def test_post_comment_http_error() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(404, text="action not found")
+        return httpx.Response(404, text="card not found")
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
-    result = await update_comment(_config(), "action-1", "new text", client=client)
+    result = await post_comment(_config(), "card-abc", "new text", client=client)
 
     assert result.success is False
     assert result.error is not None
@@ -299,7 +298,7 @@ async def test_update_comment_http_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_comment_429_prefers_retry_after_header() -> None:
+async def test_post_comment_429_prefers_retry_after_header() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             429,
@@ -312,7 +311,7 @@ async def test_update_comment_429_prefers_retry_after_header() -> None:
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
-    result = await update_comment(_config(), "action-1", "new text", client=client)
+    result = await post_comment(_config(), "card-abc", "new text", client=client)
 
     assert result.success is False
     assert result.status_code == 429
@@ -320,7 +319,7 @@ async def test_update_comment_429_prefers_retry_after_header() -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_comment_429_falls_back_to_rate_limit_header() -> None:
+async def test_post_comment_429_falls_back_to_rate_limit_header() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             429,
@@ -330,7 +329,7 @@ async def test_update_comment_429_falls_back_to_rate_limit_header() -> None:
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
-    result = await update_comment(_config(), "action-1", "new text", client=client)
+    result = await post_comment(_config(), "card-abc", "new text", client=client)
 
     assert result.success is False
     assert result.status_code == 429
@@ -338,7 +337,7 @@ async def test_update_comment_429_falls_back_to_rate_limit_header() -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_comment_429_uses_larger_of_key_and_token_headers() -> None:
+async def test_post_comment_429_uses_larger_of_key_and_token_headers() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             429,
@@ -351,32 +350,32 @@ async def test_update_comment_429_uses_larger_of_key_and_token_headers() -> None
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
-    result = await update_comment(_config(), "action-1", "new text", client=client)
+    result = await post_comment(_config(), "card-abc", "new text", client=client)
 
     assert result.retry_after_seconds == 15.0
 
 
 @pytest.mark.asyncio
-async def test_update_comment_429_defaults_when_no_headers_present() -> None:
+async def test_post_comment_429_defaults_when_no_headers_present() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(429, text="rate limited")
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
-    result = await update_comment(_config(), "action-1", "new text", client=client)
+    result = await post_comment(_config(), "card-abc", "new text", client=client)
 
     assert result.status_code == 429
     assert result.retry_after_seconds == 10.0
 
 
 @pytest.mark.asyncio
-async def test_update_comment_network_error_has_no_status_code() -> None:
+async def test_post_comment_network_error_has_no_status_code() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection refused")
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
-    result = await update_comment(_config(), "action-1", "new text", client=client)
+    result = await post_comment(_config(), "card-abc", "new text", client=client)
 
     assert result.success is False
     assert result.status_code is None
