@@ -46,6 +46,41 @@ trello:
   card_desc_template: "{content}"
   card_comment_template: "{content}"
 
+# SMS reply: a team member replies to an SMS conversation by writing a
+# comment on the card containing the trigger below. Text before the trigger
+# is free-form attribution/notes kept only in Trello; text after it (with
+# internal newlines preserved) is sent verbatim as the SMS to the number in
+# the card name. After a send attempt, the comment is annotated in place so
+# it is never resent, and can be edited since every team member authenticates
+# with the same Trello token as the daemon:
+#
+#   Nico - pas de reponse a ce jour, je renvoie un sms
+#   >>RE: Etes vous toujours interessé?
+#   Ou preferez vous un remboursement?
+#   Merci.
+#
+# becomes, once sent:
+#
+#   Nico - pas de reponse a ce jour, je renvoie un sms
+#   >>RE: Etes vous toujours interessé?
+#   Ou preferez vous un remboursement?
+#   Merci.
+#
+#   [Réponse envoyée le 17/07/2026 a 12:26]
+#
+# and, if the send fails, is retagged with a retry notice until it succeeds:
+#
+#   [Echec d'envoi, nouvel essai dans 30 s]
+reply:
+  enabled: true
+  trigger: ">>RE:"
+  case_insensitive: true
+  poll_interval_seconds: 30
+  sent_marker: "[Réponse envoyée"
+  sent_tag_template: "[Réponse envoyée le {date} a {time}]"
+  failure_marker: "[Echec d'envoi"
+  failure_tag_template: "[Echec d'envoi, nouvel essai dans {delay}]"
+
 # Debug mode (for development/testing only)
 # Enable via DEBUG_MODE environment variable (DEBUG_MODE=true)
 # When enabled, uses a faster poll interval than poll.interval_seconds

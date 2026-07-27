@@ -11,6 +11,7 @@ from .config import Config
 from .debug import _is_debug_mode, debug_print
 
 _POLL_JOB_ID = "poll_job"
+_REPLY_JOB_ID = "reply_job"
 _COUNTDOWN_JOB_ID = "countdown_log"
 
 
@@ -66,12 +67,15 @@ async def log_countdown(scheduler: AsyncIOScheduler | None) -> None:
 def start_scheduler(
     config: Config,
     poll_and_process_func: Callable[[], Awaitable[None]],
+    poll_and_send_replies_func: Callable[[], Awaitable[None]] | None = None,
 ) -> AsyncIOScheduler:
     """Create and start the scheduler with the SMS inbox poll job.
 
     Args:
         config: Configuration object (determines the poll interval)
-        poll_and_process_func: Async callable invoked on each poll
+        poll_and_process_func: Async callable invoked on each inbox poll
+        poll_and_send_replies_func: Async callable invoked on each reply poll;
+            registered only when provided and `config.reply.enabled` is True
 
     Returns:
         The started APScheduler instance
@@ -91,6 +95,17 @@ def start_scheduler(
         coalesce=True,  # Run at most once if multiple runs are missed
         misfire_grace_time=60,  # Ignore missed runs if more than 60 seconds late
     )
+
+    if poll_and_send_replies_func is not None and config.reply.enabled:
+        debug_print(f"Reply poll interval: {config.reply.poll_interval_seconds}s")
+        scheduler.add_job(
+            poll_and_send_replies_func,
+            trigger=IntervalTrigger(seconds=config.reply.poll_interval_seconds),
+            id=_REPLY_JOB_ID,
+            max_instances=1,  # Prevent concurrent reply polls
+            coalesce=True,  # Run at most once if multiple runs are missed
+            misfire_grace_time=60,  # Ignore missed runs if more than 60 seconds late
+        )
 
     if _is_debug_mode():
 

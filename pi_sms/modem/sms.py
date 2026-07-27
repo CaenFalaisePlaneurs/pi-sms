@@ -72,6 +72,26 @@ def is_replyable_sender(phone: str) -> bool:
     return bool(_REPLYABLE_PHONE_PATTERN.match(phone.strip()))
 
 
+def find_replyable_phone(text: str) -> str | None:
+    """Return the first MSISDN-like token in text that we can SMS back.
+
+    Used to recover the sender phone number embedded in a Trello card name
+    (the reverse of `TrelloConfig.card_name_template`), so a reply feature
+    can send an SMS without a separate phone-to-card index.
+
+    Returns the *first* matching token, so this assumes `{phone}` comes
+    before any other numeric placeholder (e.g. `{date}`) in
+    `card_name_template`; the default `"SMS from {phone}"` satisfies this,
+    but a reordered template with a numeric field ahead of `{phone}` could
+    cause the wrong token to be picked up.
+    """
+    for candidate in re.findall(r"\+?\d{4,15}", text):
+        candidate_str = str(candidate)
+        if is_replyable_sender(candidate_str):
+            return candidate_str
+    return None
+
+
 def _text(element: ElementTree.Element, tag: str) -> str | None:
     """Return the stripped text content of a child element, or None if absent."""
     child = element.find(tag)

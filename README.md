@@ -8,6 +8,7 @@ A Python 3.13 background service for Raspberry Pi that receives SMS via a Huawei
 - **Pattern filtering**: Discards messages matching configured regex patterns (e.g. Free Mobile voicemail notifications) without creating a card
 - **MMS auto-reply**: The modem cannot retrieve MMS content, so an incoming MMS is detected (empty content from a real sender number) and answered with an SMS asking the sender to resend as plain text or by email; no Trello card is created for the MMS itself
 - **Trello conversation cards**: One card per phone number, in a configured Trello list; the first SMS creates the card and later SMS from the same number are appended as comments
+- **Reply from Trello**: A team member replies to a conversation by writing a comment with a trigger marker; the daemon sends the text after it as an SMS to the card's phone number and tags the comment as sent (or as pending retry on failure)
 - **Self-cleaning inbox**: Each message is deleted from the modem once handled (card created, or filtered out) so the modem's limited SMS storage never fills up; a Trello failure leaves the message for the next poll to retry
 - **Isolated modem networking**: Setup provisions a static, never-default network profile for the modem's USB interface, bound by MAC address so it's reachable on every boot without ever disrupting the Pi's LAN connection
 - **Systemd service**: Auto-start, auto-restart, journald logging
@@ -40,6 +41,42 @@ flowchart LR
 MMS content cannot be retrieved via the HiLink API: an incoming MMS shows up as an inbox message with empty content but a real sender number. When detected, a configurable auto-reply SMS is sent asking the sender to resend as plain text or by email, then the message is deleted; senders that cannot receive a reply (alphanumeric IDs, short codes) are discarded without a reply. No Trello card is created for an MMS itself, so a plain-text follow-up from the sender is what creates or comments on their card.
 
 The E3372 in HiLink mode presents itself as a USB network card (typically `eth1`) hosting a web API at `http://192.168.8.1`. There is no `/dev/ttyUSB*` device and no AT command interface. Every state-changing API call (listing or deleting SMS) requires a fresh session token fetched immediately beforehand from `/api/webserver/SesTokInfo` (a CSRF-style flow).
+
+## Replying to an SMS from Trello
+
+Since every team member authenticates to Trello with the same account, replies are driven by a text convention in the comment rather than by who wrote it. To reply to a conversation, add a comment on its card containing the trigger (`>>RE:` by default):
+
+```
+Nico - pas de reponse a ce jour, je renvoie un sms
+>>RE: Etes vous toujours interessé?
+Ou preferez vous un remboursement?
+Merci.
+```
+
+Everything before the trigger is free-form attribution or notes, kept only in Trello. Everything after it (internal newlines preserved) is sent verbatim as the SMS to the number in the card's title. On the next reply poll, the daemon sends the SMS and appends a tag to the comment:
+
+```
+[Réponse envoyée le 17/07/2026 a 12:26]
+```
+
+so the comment is never resent and the team sees confirmation directly on the card. If the send fails (no signal, no SIM), the comment is tagged instead with a retry notice reflecting `reply.poll_interval_seconds`:
+
+```
+[Echec d'envoi, nouvel essai dans 30 s]
+```
+
+and retried on every following poll until it succeeds. Comments that already carry the sent tag, or that never contained the trigger, are ignored.
+
+```mermaid
+flowchart LR
+  sched2["Poll every N seconds"] --> cards["List open cards"]
+  cards --> comments["List comments per card"]
+  comments --> trig{"Contains trigger,\nnot already sent?"}
+  trig -->|"no"| ignore["Ignore"]
+  trig -->|"yes"| send["Send SMS body via modem"]
+  send -->|"success"| tagok["Tag comment: sent"]
+  send -->|"failure"| tagfail["Tag comment: retry pending"]
+```
 
 ## Installation
 
@@ -128,9 +165,10 @@ See [config.example.yaml](config.example.yaml) for all configuration options, in
 - `filter`: regex patterns for messages to discard without a card
 - `mms`: whether to auto-reply to detected MMS, and the reply text
 - `trello`: API key/token, destination list, and card title/description/comment templates
+- `reply`: trigger marker, reply poll interval, and sent/failure tag templates (see "Replying to an SMS from Trello" above)
+- `debug`: faster poll interval when `DEBUG_MODE=true`
 
 Card-to-phone matching is a substring check against the card name, so `card_name_template` must include `{phone}` for the one-card-per-number behavior to work.
-- `debug`: faster poll interval when `DEBUG_MODE=true`
 
 ## Service Management
 
@@ -151,7 +189,7 @@ sudo journalctl -u pi-sms -n 50
 
 sudo journalctl -u pi-sms -f
 
-In normal mode, only card creations, comments, and MMS auto-replies are logged (`Created Trello card for SMS from {phone}`, `Added SMS from {phone} to existing card`, and `Sent MMS auto-reply to {phone}`); everything else (inbox poll counts, filtered messages, Trello failures) is silent. Two things affect what you see:
+In normal mode, only card creations, comments, MMS auto-replies, and sent replies are logged (`Created Trello card for SMS from {phone}`, `Added SMS from {phone} to existing card`, `Sent MMS auto-reply to {phone}`, and `Sent SMS reply to {phone}`); everything else (inbox poll counts, filtered messages, Trello failures) is silent. Two things affect what you see:
 
 - The daemon is line-buffered by Python but journald only flushes on buffer boundaries, so `-f` can appear to lag in bursts rather than truly live. To force unbuffered output, add an override:
 

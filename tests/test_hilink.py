@@ -1,5 +1,7 @@
 """Tests for pi_sms.modem.hilink using a mocked HTTP transport."""
 
+import asyncio
+
 import httpx
 import pytest
 
@@ -127,6 +129,41 @@ async def test_send_sms_failure_response() -> None:
 
     assert result.success is False
     assert result.error is not None
+
+
+@pytest.mark.asyncio
+async def test_concurrent_calls_are_serialized_by_internal_lock() -> None:
+    """The inbox poll and reply poll run as independent scheduler jobs and can
+    both reach the same HilinkClient at once; the internal lock must ensure
+    only one request is ever in flight so session tokens can't interleave.
+    """
+    active_requests = 0
+    max_concurrent_requests = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal active_requests, max_concurrent_requests
+        active_requests += 1
+        max_concurrent_requests = max(max_concurrent_requests, active_requests)
+        try:
+            await asyncio.sleep(0.01)
+            if request.url.path == "/api/webserver/SesTokInfo":
+                return httpx.Response(200, text=_SES_TOK_RESPONSE)
+            if request.url.path == "/api/sms/sms-list":
+                return httpx.Response(200, text=_SMS_LIST_RESPONSE)
+            if request.url.path == "/api/sms/send-sms":
+                return httpx.Response(200, text="<response>OK</response>")
+            raise AssertionError(f"Unexpected request to {request.url.path}")
+        finally:
+            active_requests -= 1
+
+    client = _client_with_handler(httpx.MockTransport(handler))
+
+    await asyncio.gather(
+        client.list_inbox(),
+        client.send_sms("+33612345678", "Hi"),
+    )
+
+    assert max_concurrent_requests == 1
 
 
 @pytest.mark.asyncio

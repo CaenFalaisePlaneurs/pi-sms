@@ -14,6 +14,12 @@ from ..modem.sms import SmsMessage
 
 _TRELLO_API_BASE_URL = "https://api.trello.com/1"
 
+# Trello does not reliably send a standard Retry-After header on 429s, but it
+# does document a fixed rate-limit window (10s) and returns the window size
+# on every response via x-rate-limit-*-interval-ms; fall back to that window
+# when neither header is present.
+_DEFAULT_RATE_LIMIT_BACKOFF_SECONDS = 10.0
+
 
 @dataclass
 class TrelloCard:
@@ -24,6 +30,15 @@ class TrelloCard:
 
 
 @dataclass
+class TrelloComment:
+    """A comment (commentCard action) on a Trello card."""
+
+    id: str
+    text: str
+    date: str
+
+
+@dataclass
 class TrelloResult:
     """Outcome of a Trello API operation."""
 
@@ -31,6 +46,8 @@ class TrelloResult:
     card_id: str | None = None
     action: str | None = None  # "created" or "commented"
     error: str | None = None
+    status_code: int | None = None
+    retry_after_seconds: float | None = None  # populated when status_code == 429
 
 
 async def record_sms(
@@ -206,6 +223,150 @@ async def find_card_id_for_phone(
         if phone in card.name:
             return card.id, None
     return None, None
+
+
+async def list_card_comments(
+    config: TrelloConfig,
+    card_id: str,
+    client: httpx.AsyncClient | None = None,
+) -> tuple[list[TrelloComment], str | None]:
+    """List comments (commentCard actions) on a Trello card.
+
+    Args:
+        config: Trello configuration (key, token)
+        card_id: Trello card ID to list comments for
+        client: Optional pre-configured httpx.AsyncClient (for tests); when
+            provided, it is reused and not closed by this function.
+
+    Returns:
+        Tuple of (comments, error). On success, error is None. On failure,
+        comments is empty and error describes the failure.
+    """
+    if client is not None:
+        return await _list_card_comments(config, card_id, client)
+    async with httpx.AsyncClient() as new_client:
+        return await _list_card_comments(config, card_id, new_client)
+
+
+async def _list_card_comments(
+    config: TrelloConfig, card_id: str, client: httpx.AsyncClient
+) -> tuple[list[TrelloComment], str | None]:
+    try:
+        response = await client.get(
+            f"{_TRELLO_API_BASE_URL}/cards/{card_id}/actions",
+            params={
+                "key": config.key,
+                "token": config.token,
+                "filter": "commentCard",
+                # "data" (which holds data.text, the comment body) is only
+                # returned when explicitly listed here; omitting it makes
+                # Trello drop the field entirely, not just leave it empty.
+                "fields": "id,type,date,data",
+            },
+            timeout=15,
+        )
+        response.raise_for_status()
+    except httpx.HTTPError as e:
+        return [], str(e)
+
+    try:
+        raw_actions = response.json()
+    except ValueError:
+        return [], "Invalid JSON response listing card comments"
+
+    comments = [
+        TrelloComment(
+            id=action["id"],
+            text=action.get("data", {}).get("text", ""),
+            date=action.get("date", ""),
+        )
+        for action in raw_actions
+    ]
+    return comments, None
+
+
+async def update_comment(
+    config: TrelloConfig,
+    comment_id: str,
+    text: str,
+    client: httpx.AsyncClient | None = None,
+) -> TrelloResult:
+    """Update the text of an existing comment (commentCard action).
+
+    Only the author of a comment can edit it via the Trello API; since the
+    daemon and every team member authenticate as the same Trello token, the
+    daemon can always edit its own reply comments to mark them as sent.
+
+    Args:
+        config: Trello configuration (key, token)
+        comment_id: Trello action ID of the comment to update
+        text: New comment text
+        client: Optional pre-configured httpx.AsyncClient (for tests); when
+            provided, it is reused and not closed by this function.
+
+    Returns:
+        TrelloResult with action="updated" on success
+    """
+    params = {"key": config.key, "token": config.token, "text": text}
+    if client is not None:
+        return await _put_comment(client, comment_id, params)
+    async with httpx.AsyncClient() as new_client:
+        return await _put_comment(new_client, comment_id, params)
+
+
+async def _put_comment(
+    client: httpx.AsyncClient, comment_id: str, params: dict[str, str]
+) -> TrelloResult:
+    try:
+        response = await client.put(
+            f"{_TRELLO_API_BASE_URL}/actions/{comment_id}",
+            params=params,
+            timeout=15,
+        )
+        response.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        status_code = e.response.status_code
+        retry_after = _rate_limit_backoff_seconds(e.response) if status_code == 429 else None
+        return TrelloResult(
+            success=False, error=str(e), status_code=status_code, retry_after_seconds=retry_after
+        )
+    except httpx.HTTPError as e:
+        return TrelloResult(success=False, error=str(e))
+    return TrelloResult(success=True, action="updated")
+
+
+def _rate_limit_backoff_seconds(response: httpx.Response) -> float:
+    """Determine how long to wait before retrying a 429 response.
+
+    Trello does not reliably send a standard Retry-After header, so this
+    prefers it when present, falls back to Trello's documented rate-limit
+    window headers (interval in milliseconds), and otherwise uses the
+    documented default window size.
+    """
+    retry_after = response.headers.get("Retry-After")
+    if retry_after is not None:
+        try:
+            return float(retry_after)
+        except ValueError:
+            pass
+
+    interval_headers = (
+        "x-rate-limit-api-token-interval-ms",
+        "x-rate-limit-api-key-interval-ms",
+    )
+    interval_ms_values = []
+    for header in interval_headers:
+        value = response.headers.get(header)
+        if value is not None:
+            try:
+                interval_ms_values.append(float(value))
+            except ValueError:
+                continue
+
+    if interval_ms_values:
+        return max(interval_ms_values) / 1000
+
+    return _DEFAULT_RATE_LIMIT_BACKOFF_SECONDS
 
 
 async def _post_card(client: httpx.AsyncClient, params: dict[str, str]) -> TrelloResult:

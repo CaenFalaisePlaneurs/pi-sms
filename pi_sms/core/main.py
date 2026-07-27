@@ -17,6 +17,7 @@ warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*found in s
 try:
     from ..filter.filter import SmsFilter
     from ..modem.hilink import HilinkClient
+    from ..reply.reply import poll_and_send_replies
     from .config import Config, load_config
     from .debug import debug_print
     from .dependencies import check_external_dependencies
@@ -35,12 +36,14 @@ except ImportError:
     from pi_sms.core.workflow import poll_and_process
     from pi_sms.filter.filter import SmsFilter
     from pi_sms.modem.hilink import HilinkClient
+    from pi_sms.reply.reply import poll_and_send_replies
 
 # Global state
 scheduler: AsyncIOScheduler | None = None
 config: Config | None = None
 _shutdown_event: asyncio.Event | None = None
 _is_running = {"value": False}
+_reply_is_running = {"value": False}
 
 
 def shutdown(signum: int, frame: object) -> None:  # noqa: ARG001
@@ -106,9 +109,19 @@ async def run_service(config_path: str | None = None) -> None:
         assert config is not None
         await poll_and_process(config, modem, sms_filter, _is_running)
 
+    async def _poll_and_send_replies_wrapper() -> None:
+        assert config is not None
+        await poll_and_send_replies(config, modem, _reply_is_running)
+
     # Run an initial poll immediately, then start the recurring schedule
     await _poll_and_process_wrapper()
-    scheduler = start_scheduler(config, _poll_and_process_wrapper)
+    if config.reply.enabled:
+        await _poll_and_send_replies_wrapper()
+    scheduler = start_scheduler(
+        config,
+        _poll_and_process_wrapper,
+        _poll_and_send_replies_wrapper,
+    )
 
     try:
         while not _shutdown_event.is_set():

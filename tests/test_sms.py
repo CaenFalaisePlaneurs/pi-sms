@@ -1,6 +1,12 @@
 """Tests for pi_sms.modem.sms XML parsing."""
 
-from pi_sms.modem.sms import SmsMessage, is_mms, is_replyable_sender, parse_sms_list
+from pi_sms.modem.sms import (
+    SmsMessage,
+    find_replyable_phone,
+    is_mms,
+    is_replyable_sender,
+    parse_sms_list,
+)
 
 _TWO_MESSAGE_RESPONSE = """<?xml version="1.0" encoding="UTF-8"?>
 <response>
@@ -92,3 +98,19 @@ def test_is_replyable_sender_false_for_empty_phone() -> None:
 
 def test_is_replyable_sender_false_for_short_code() -> None:
     assert is_replyable_sender("666") is False
+
+
+def test_find_replyable_phone_extracts_number_from_card_name() -> None:
+    assert find_replyable_phone("SMS from +33612345678") == "+33612345678"
+
+
+def test_find_replyable_phone_returns_none_when_no_number_present() -> None:
+    assert find_replyable_phone("SMS from Free") is None
+
+
+def test_find_replyable_phone_returns_none_for_short_code() -> None:
+    assert find_replyable_phone("SMS from 666") is None
+
+
+def test_find_replyable_phone_returns_first_replyable_match() -> None:
+    assert find_replyable_phone("SMS from +33612345678 (added 2026)") == "+33612345678"

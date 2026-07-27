@@ -39,7 +39,9 @@ class TrelloConfig(BaseModel):
     list_id: str = Field(..., min_length=1, description="Destination Trello list ID for new cards")
     card_name_template: str = Field(
         "SMS from {phone}",
-        description="Template for the Trello card title, supports {phone} and {date}",
+        description="Template for the Trello card title, supports {phone} and {date}. "
+        "{phone} must appear before any other numeric placeholder for the reply feature "
+        "to reliably recover the phone number from the card title.",
     )
     card_desc_template: str = Field(
         "{content}",
@@ -70,6 +72,44 @@ class MmsConfig(BaseModel):
     )
 
 
+class ReplyConfig(BaseModel):
+    """Trello-comment-driven SMS reply configuration.
+
+    A team member replies to an SMS conversation by writing a comment on the
+    card containing the trigger marker; everything after the marker (on the
+    same or following lines) is sent as the SMS body, and anything before it
+    is left untouched as free-form attribution/notes. After a send attempt,
+    the comment is annotated in place so it is never resent.
+    """
+
+    enabled: bool = Field(True, description="Whether to poll Trello comments for SMS replies")
+    trigger: str = Field(
+        ">>RE:",
+        min_length=1,
+        description="Marker in a comment; text after the first occurrence is the SMS body",
+    )
+    case_insensitive: bool = Field(True, description="Match the trigger case-insensitively")
+    poll_interval_seconds: int = Field(
+        30, ge=5, le=3600, description="Interval between reply comment polls (seconds)"
+    )
+    sent_marker: str = Field(
+        "[Réponse envoyée",
+        description="Substring identifying a comment whose reply has already been sent",
+    )
+    sent_tag_template: str = Field(
+        "[Réponse envoyée le {date} a {time}]",
+        description="Tag appended to a comment once its reply SMS is sent, supports {date}, {time}",
+    )
+    failure_marker: str = Field(
+        "[Echec d'envoi",
+        description="Substring identifying a comment with a pending send failure tag",
+    )
+    failure_tag_template: str = Field(
+        "[Echec d'envoi, nouvel essai dans {delay}]",
+        description="Tag appended to a comment when the SMS send fails, supports {delay}",
+    )
+
+
 class DebugConfig(BaseModel):
     """Debug configuration for development/testing.
 
@@ -88,6 +128,7 @@ class Config(BaseModel):
     filter: FilterConfig = Field(default_factory=FilterConfig)
     mms: MmsConfig = Field(default_factory=MmsConfig)
     trello: TrelloConfig
+    reply: ReplyConfig = Field(default_factory=ReplyConfig)
     debug: DebugConfig | None = Field(None, description="Optional debug configuration")
 
 

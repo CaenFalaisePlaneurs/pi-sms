@@ -4,8 +4,15 @@ The E3372 HiLink web API uses a CSRF-style flow: every state-changing request
 (listing or deleting SMS) requires a fresh session token pair fetched
 immediately beforehand from `/api/webserver/SesTokInfo`. The token is
 single-use, so it must not be cached across requests.
+
+The inbox poll and the Trello reply poll run as independent scheduler jobs
+and can both reach a `HilinkClient` at the same time; an interleaved
+session-token fetch and use from two concurrent requests could invalidate
+each other. `HilinkClient` therefore serializes all requests behind an
+internal lock so only one is ever in flight against the modem.
 """
 
+import asyncio
 import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -72,6 +79,7 @@ class HilinkClient:
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
         self._injected_client = client
+        self._lock = asyncio.Lock()
 
     @asynccontextmanager
     async def _http_client(self) -> AsyncIterator[httpx.AsyncClient]:
@@ -102,7 +110,7 @@ class HilinkClient:
         Returns an empty list on any connectivity or session error so the
         polling loop can simply retry on the next scheduled run.
         """
-        async with self._http_client() as client:
+        async with self._lock, self._http_client() as client:
             session = await self._fetch_session(client)
             if session is None:
                 return []
@@ -120,7 +128,7 @@ class HilinkClient:
 
     async def delete_sms(self, index: str) -> HilinkResult:
         """Delete a message from the modem inbox by its Index."""
-        async with self._http_client() as client:
+        async with self._lock, self._http_client() as client:
             session = await self._fetch_session(client)
             if session is None:
                 return HilinkResult(success=False, error="Could not obtain HiLink session token")
@@ -146,7 +154,7 @@ class HilinkClient:
 
     async def send_sms(self, phone: str, content: str) -> HilinkResult:
         """Send an SMS to a phone number via the modem."""
-        async with self._http_client() as client:
+        async with self._lock, self._http_client() as client:
             session = await self._fetch_session(client)
             if session is None:
                 return HilinkResult(success=False, error="Could not obtain HiLink session token")
