@@ -36,7 +36,10 @@ from .text import (
 # Posting a new status comment is always permitted for the daemon's own
 # token, so failures here should be rare and transient; retrying a few times
 # with backoff narrows the (much smaller than before) window where an SMS
-# sends successfully but the confirmation never gets recorded.
+# sends successfully but the confirmation never gets recorded. Non-transient
+# failures (see _is_retryable) give up after a single attempt instead of
+# spending the full backoff schedule, so one bad reply can't stretch a poll
+# cycle past `poll_interval_seconds` and overlap with the next one.
 _POST_COMMENT_ATTEMPTS = 5
 _BASE_RETRY_DELAY_SECONDS = 2
 _MAX_RETRY_DELAY_SECONDS = 15
@@ -147,11 +150,25 @@ async def _post_status_comment_with_retries(
     """
     result = await post_comment(config.trello, card_id, text, client)
     attempt = 1
-    while not result.success and attempt < _POST_COMMENT_ATTEMPTS:
+    while not result.success and _is_retryable(result) and attempt < _POST_COMMENT_ATTEMPTS:
         await asyncio.sleep(_retry_delay_seconds(result, attempt))
         result = await post_comment(config.trello, card_id, text, client)
         attempt += 1
     return result
+
+
+def _is_retryable(result: TrelloResult) -> bool:
+    """Return True if retrying result's failure could plausibly succeed.
+
+    Network errors (no status code), 429s, and 5xx responses may be
+    transient; other 4xx errors (bad request, auth, not found) will fail
+    identically on every retry, so burning through the backoff schedule
+    only delays giving up and risks the poll cycle running long enough to
+    overlap with the next scheduled one.
+    """
+    if result.status_code is None:
+        return True
+    return result.status_code == 429 or result.status_code >= 500
 
 
 def _retry_delay_seconds(result: TrelloResult, attempt: int) -> float:

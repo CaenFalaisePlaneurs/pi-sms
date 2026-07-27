@@ -152,6 +152,12 @@ async def run_service(config_path: str | None = None) -> None:
 
 def main() -> None:
     """Main entry point."""
+    # journald only flushes stdout on buffer boundaries by default (Python
+    # fully buffers stdout when it isn't a TTY), which can delay log lines
+    # by minutes under a systemd unit; force line-buffering so every print()
+    # shows up in `journalctl -f` as it happens.
+    sys.stdout.reconfigure(line_buffering=True)  # type: ignore[union-attr]
+
     parser = argparse.ArgumentParser(
         description="SMS-to-Trello daemon for Raspberry Pi with a Huawei E3372 HiLink modem"
     )

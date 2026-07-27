@@ -366,6 +366,60 @@ async def test_poll_and_send_replies_honors_retry_after_on_rate_limit() -> None:
 
 
 @pytest.mark.asyncio
+async def test_poll_and_send_replies_stops_retrying_status_comment_on_permanent_error() -> None:
+    modem = AsyncMock()
+    modem.send_sms.return_value = HilinkResult(success=True)
+    is_running_ref = {"value": False}
+    mock_post_comment = AsyncMock(
+        return_value=TrelloResult(success=False, error="unauthorized", status_code=401)
+    )
+    mock_sleep = AsyncMock()
+
+    with (
+        patch(
+            "pi_sms.reply.reply.list_open_cards",
+            new=AsyncMock(return_value=([_card()], None)),
+        ),
+        patch(
+            "pi_sms.reply.reply.list_card_comments",
+            new=AsyncMock(return_value=([_comment(">>RE: Toujours interessé?")], None)),
+        ),
+        patch("pi_sms.reply.reply.post_comment", new=mock_post_comment),
+        patch("pi_sms.reply.reply.asyncio.sleep", new=mock_sleep),
+    ):
+        await poll_and_send_replies(_config(), modem, is_running_ref, client=httpx.AsyncClient())
+
+    mock_post_comment.assert_awaited_once()
+    mock_sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_poll_and_send_replies_keeps_retrying_status_comment_on_server_error() -> None:
+    modem = AsyncMock()
+    modem.send_sms.return_value = HilinkResult(success=True)
+    is_running_ref = {"value": False}
+    mock_post_comment = AsyncMock(
+        return_value=TrelloResult(success=False, error="server error", status_code=500)
+    )
+
+    with (
+        patch(
+            "pi_sms.reply.reply.list_open_cards",
+            new=AsyncMock(return_value=([_card()], None)),
+        ),
+        patch(
+            "pi_sms.reply.reply.list_card_comments",
+            new=AsyncMock(return_value=([_comment(">>RE: Toujours interessé?")], None)),
+        ),
+        patch("pi_sms.reply.reply.post_comment", new=mock_post_comment),
+        patch("pi_sms.reply.reply.asyncio.sleep", new=AsyncMock()),
+    ):
+        await poll_and_send_replies(_config(), modem, is_running_ref, client=httpx.AsyncClient())
+
+    assert mock_post_comment.await_count == 5
+
+
+@pytest.mark.asyncio
 async def test_poll_and_send_replies_gives_up_after_exhausting_confirmation_retries() -> None:
     """If every confirmation-post attempt fails after a successful send, the trigger stays
     unconfirmed (a documented at-least-once trade-off: the next poll may resend).
