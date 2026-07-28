@@ -249,6 +249,12 @@ nmcli -t -f DEVICE,STATE device
 ip -br addr show eth1
 curl -s -o /dev/null -w '%{http_code}\n' http://192.168.8.1/
 
+### Emoji and MMS
+
+The E3372 HiLink firmware decodes incoming SMS internally before exposing them through its web API, and that internal decoder is limited to UCS-2 (the Basic Multilingual Plane, code points up to U+FFFF). Symbols within that range (e.g. ❤, ★, most non-Latin scripts) come through correctly. Most modern colorful emoji live outside it and require a UTF-16 surrogate pair to represent; the modem's firmware blanks those out to empty space before the message ever reaches the API, so there is no data left for `pi-sms` to recover. The modem's `sms-list-pdu` endpoint, which would expose the raw undecoded PDU (and let `pi-sms` decode it correctly), returns error `100002` (not supported) on this firmware.
+
+MMS is a separate transport (WAP-push notification plus a fetch from the carrier's MMSC over mobile data) that the HiLink API does not expose at all; incoming MMS surface in the inbox as a message with an empty `Content`, which `pi_sms.modem.sms.is_mms` detects to trigger the configured auto-reply (see `mms.enabled`/`mms.reply_text` in [config.example.yaml](config.example.yaml)).
+
 ### No SIM / no signal
 
 Check SIM and signal status directly:
