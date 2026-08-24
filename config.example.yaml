@@ -18,15 +18,18 @@ filter:
 
 # MMS auto-reply: the modem cannot retrieve MMS content, so an incoming MMS
 # is detected (empty content from a real sender number) and answered with a
-# reply asking the sender to resend as plain text or by email. No Trello
-# card is created for the MMS itself; a plain-text follow-up creates one
-# through the normal flow. Senders that cannot be replied to (alphanumeric
-# IDs, short codes) are silently discarded.
+# reply asking the sender to resend as SMS. Phones often send a long text as
+# MMS once it exceeds one SMS (160 GSM-7 / 70 Unicode characters), the same
+# as for photos and attachments. No Trello card is created for the MMS
+# itself; a plain-text SMS follow-up creates one through the normal flow.
+# Senders that cannot be replied to (alphanumeric IDs, short codes) are
+# silently discarded.
 mms:
   enabled: true
   reply_text: >-
-    Ce numéro ne prend pas en charge les MMS (images, pièces jointes).
-    Merci de nous envoyer votre message en texte simple ou par email à
+    Ce numéro ne lit pas les MMS (photos, pièces jointes, ou textes trop
+    longs que le téléphone envoie en MMS). Merci de renvoyer en SMS texte,
+    au besoin en plusieurs messages, ou par email à
     contact@caenfalaiseplaneurs.fr
 
 # Trello configuration: one card per phone number, in the configured list.

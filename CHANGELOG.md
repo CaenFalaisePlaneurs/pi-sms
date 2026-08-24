@@ -11,6 +11,7 @@
 
 - Modem and LAN NetworkManager connections are now bound to MAC addresses instead of interface names, avoiding a boot-time `eth0`/`eth1` naming race where the modem's DHCP server could hijack the Pi's default route and drop it off the LAN
 - Reply polling reads new board comments since a persisted SQLite cursor instead of listing comments on every open card each cycle
+- The MMS auto-reply text now also covers long texts that a phone sends as MMS, not only photos and attachments
 
 ### Fixed
 

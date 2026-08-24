@@ -65,8 +65,9 @@ class MmsConfig(BaseModel):
 
     enabled: bool = Field(True, description="Whether to auto-reply to detected MMS")
     reply_text: str = Field(
-        "Ce numéro ne prend pas en charge les MMS (images, pièces jointes). "
-        "Merci de nous envoyer votre message en texte simple ou par email à "
+        "Ce numéro ne lit pas les MMS (photos, pièces jointes, ou textes trop "
+        "longs que le téléphone envoie en MMS). Merci de renvoyer en SMS texte, "
+        "au besoin en plusieurs messages, ou par email à "
         "contact@caenfalaiseplaneurs.fr",
         description="Auto-reply SMS sent to the sender of a detected MMS",
     )
