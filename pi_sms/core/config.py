@@ -111,6 +111,11 @@ class ReplyConfig(BaseModel):
         "[Echec d'envoi, nouvelle tentative en cours]",
         description="Posted as a new comment (once) when a reply SMS fails to send",
     )
+    sqlite_path: str = Field(
+        "/var/lib/pi-sms/reply.sqlite",
+        min_length=1,
+        description="SQLite file for the reply comment cursor and send state",
+    )
 
 
 class DebugConfig(BaseModel):

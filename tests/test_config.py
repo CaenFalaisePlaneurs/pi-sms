@@ -19,6 +19,7 @@ def test_config_uses_defaults_when_optional_sections_missing() -> None:
     assert config.poll.interval_seconds == 30
     assert config.filter.exclude_patterns == []
     assert config.debug is None
+    assert config.reply.sqlite_path == "/var/lib/pi-sms/reply.sqlite"
 
 
 def test_config_requires_trello_section() -> None:

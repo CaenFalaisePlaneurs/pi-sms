@@ -73,18 +73,21 @@ and the SMS send is retried silently on every following poll until it succeeds, 
 
 ```mermaid
 flowchart LR
-  sched2["Poll every N seconds"] --> cards["List open cards"]
-  cards --> comments["List comments per card"]
-  comments --> trig{"Contains trigger?"}
-  trig -->|"no"| ignore["Ignore"]
-  trig -->|"yes"| sent{"Sent confirmation\nalready posted?"}
-  sent -->|"yes"| ignore
-  sent -->|"no"| send["Send SMS body via modem"]
-  send -->|"success"| postok["Post new comment: sent confirmation"]
-  send -->|"failure"| notice{"Failure notice\nalready posted?"}
-  notice -->|"no"| postfail["Post new comment: failure notice"]
-  notice -->|"yes"| silent["Retry silently next poll"]
+  sched2["Poll every N seconds"] --> retry["Retry pending SQLite rows"]
+  retry --> cursor{"Cursor in SQLite?"}
+  cursor -->|"no first run"| bootstrap["List open cards and comments once"]
+  bootstrap --> send
+  cursor -->|"yes"| actions["Fetch new board comments since cursor"]
+  actions --> trig{"New trigger on SMS list?"}
+  trig -->|"no"| ignore["Advance cursor"]
+  trig -->|"yes"| send["Send SMS body via modem"]
+  send -->|"success"| postok["Post sent confirmation and mark sent"]
+  send -->|"failure"| notice{"Failure notice already posted?"}
+  notice -->|"no"| postfail["Post failure notice once"]
+  notice -->|"yes"| silent["Keep pending for next poll"]
 ```
+
+Reply polls persist their cursor and send state in SQLite (`reply.sqlite_path`, default `/var/lib/pi-sms/reply.sqlite`) so later polls fetch only new board comments instead of listing every card.
 
 ## Installation
 
@@ -104,6 +107,25 @@ template) using the packaged `config.example.yaml`. After it finishes, edit
 ```bash
 sudo nano /etc/pi-sms/config.yaml
 sudo systemctl start pi-sms
+```
+
+### Upgrade an existing install
+
+To pick up the latest `main` commit, run the same installer again (it
+force-reinstalls `pi-sms` when the package is already present, then re-runs
+setup so the systemd unit stays current):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/CaenFalaisePlaneurs/pi-sms/main/scripts/install.sh | sh
+sudo systemctl restart pi-sms
+```
+
+Or, from the venv used at install time:
+
+```bash
+~/pi-sms-venv/bin/pip install --upgrade --force-reinstall --no-deps git+https://github.com/CaenFalaisePlaneurs/pi-sms.git@main
+sudo ~/pi-sms-venv/bin/python -m pi_sms.setup.setup
+sudo systemctl restart pi-sms
 ```
 
 If you prefer to verify every step manually, follow the steps below instead.
@@ -173,7 +195,7 @@ See [config.example.yaml](config.example.yaml) for all configuration options, in
 - `filter`: regex patterns for messages to discard without a card
 - `mms`: whether to auto-reply to detected MMS, and the reply text
 - `trello`: API key/token, destination list, and card title/description/comment templates
-- `reply`: trigger marker, reply poll interval, and sent/failure status comment templates (see "Replying to an SMS from Trello" above)
+- `reply`: trigger marker, reply poll interval, sent/failure status comment templates, and SQLite path for the comment cursor (see "Replying to an SMS from Trello" above)
 - `debug`: faster poll interval when `DEBUG_MODE=true`
 
 Card-to-phone matching is a substring check against the card name, so `card_name_template` must include `{phone}` for the one-card-per-number behavior to work.

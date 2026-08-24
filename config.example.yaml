@@ -77,6 +77,9 @@ reply:
   sent_tag_template: "[Réponse envoyée le {date} a {time}]"
   failure_marker: "[Echec d'envoi"
   failure_tag_template: "[Echec d'envoi, nouvelle tentative en cours]"
+  # Persisted cursor and send state so reply polls fetch only new board comments
+  # instead of listing every card. systemd StateDirectory=pi-sms creates this dir.
+  sqlite_path: "/var/lib/pi-sms/reply.sqlite"
 
 # Debug mode (for development/testing only)
 # Enable via DEBUG_MODE environment variable (DEBUG_MODE=true)

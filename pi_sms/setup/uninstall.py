@@ -78,6 +78,10 @@ def main() -> None:
     else:
         print("\nReady for uninstall")
 
+    sqlite_path = Path("/var/lib/pi-sms/reply.sqlite")
+    if sqlite_path.exists():
+        print(f"Reply state database will be preserved at {sqlite_path}")
+
     pip_cmd = find_pip_command()
     print(f"\nNow run: {pip_cmd} uninstall pi-sms")
     print("The systemd service file will be removed automatically.")

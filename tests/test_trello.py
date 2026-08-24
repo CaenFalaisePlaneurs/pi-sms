@@ -10,6 +10,10 @@ from pi_sms.trello.trello import (
     create_card,
     fetch_emoji_map,
     find_card_id_for_phone,
+    get_card_list_and_name,
+    get_latest_board_comment_id,
+    get_list_board_id,
+    list_board_comments_since,
     list_card_comments,
     list_open_cards,
     post_comment,
@@ -439,3 +443,131 @@ async def test_record_sms_fails_when_lookup_fails() -> None:
 
     assert result.success is False
     assert result.action is None
+
+
+@pytest.mark.asyncio
+async def test_get_list_board_id_success() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/1/lists/list123/board"
+        assert request.url.params["fields"] == "id"
+        return httpx.Response(200, json={"id": "board-abc"})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    board_id, error = await get_list_board_id(_config(), client=client)
+
+    assert error is None
+    assert board_id == "board-abc"
+
+
+@pytest.mark.asyncio
+async def test_get_latest_board_comment_id_returns_newest() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/1/boards/board-abc/actions"
+        assert request.url.params["filter"] == "commentCard"
+        assert request.url.params["limit"] == "1"
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "id": "act-newest",
+                    "data": {
+                        "text": "hello",
+                        "card": {"id": "c1", "name": "n"},
+                        "list": {"id": "l"},
+                    },
+                    "date": "2026-07-17T11:00:00.000Z",
+                }
+            ],
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    action_id, error = await get_latest_board_comment_id(_config(), "board-abc", client=client)
+
+    assert error is None
+    assert action_id == "act-newest"
+
+
+@pytest.mark.asyncio
+async def test_list_board_comments_since_paginates_and_returns_oldest_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import pi_sms.trello.trello as trello_module
+
+    monkeypatch.setattr(trello_module, "_BOARD_COMMENTS_PAGE_LIMIT", 2)
+    seen_before: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/1/boards/board-abc/actions"
+        assert request.url.params["since"] == "cursor-0"
+        assert request.url.params["filter"] == "commentCard"
+        before = request.url.params.get("before")
+        seen_before.append(before)
+        if before is None:
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": "act-3",
+                        "data": {
+                            "text": "third",
+                            "card": {"id": "c1", "name": "SMS from +33612345678"},
+                            "list": {"id": "list123"},
+                        },
+                        "date": "2026-07-17T13:00:00.000Z",
+                    },
+                    {
+                        "id": "act-2",
+                        "data": {
+                            "text": "second",
+                            "card": {"id": "c1", "name": "SMS from +33612345678"},
+                            "list": {"id": "list123"},
+                        },
+                        "date": "2026-07-17T12:00:00.000Z",
+                    },
+                ],
+            )
+        assert before == "act-2"
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "id": "act-1",
+                    "data": {
+                        "text": "first",
+                        "card": {"id": "c1", "name": "SMS from +33612345678"},
+                        "list": {"id": "list123"},
+                    },
+                    "date": "2026-07-17T11:00:00.000Z",
+                }
+            ],
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    comments, error = await list_board_comments_since(
+        _config(), "board-abc", "cursor-0", client=client
+    )
+
+    assert error is None
+    assert [c.id for c in comments] == ["act-1", "act-2", "act-3"]
+    assert comments[0].text == "first"
+    assert comments[0].card_id == "c1"
+    assert comments[0].list_id == "list123"
+    assert seen_before == [None, "act-2"]
+
+
+@pytest.mark.asyncio
+async def test_get_card_list_and_name_success() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/1/cards/card-abc"
+        assert request.url.params["fields"] == "idList,name"
+        return httpx.Response(200, json={"idList": "list123", "name": "SMS from +33612345678"})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    location, error = await get_card_list_and_name(_config(), "card-abc", client=client)
+
+    assert error is None
+    assert location == ("list123", "SMS from +33612345678")

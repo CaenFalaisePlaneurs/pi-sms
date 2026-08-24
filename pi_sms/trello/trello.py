@@ -36,6 +36,9 @@ class TrelloComment:
     id: str
     text: str
     date: str
+    card_id: str = ""
+    card_name: str = ""
+    list_id: str = ""
 
 
 @dataclass
@@ -350,15 +353,257 @@ async def _list_card_comments(
     except ValueError:
         return [], "Invalid JSON response listing card comments"
 
-    comments = [
-        TrelloComment(
-            id=action["id"],
-            text=action.get("data", {}).get("text", ""),
-            date=action.get("date", ""),
-        )
-        for action in raw_actions
-    ]
+    comments = [_comment_from_action(action) for action in raw_actions]
     return comments, None
+
+
+_BOARD_COMMENTS_PAGE_LIMIT = 1000
+
+
+async def get_list_board_id(
+    config: TrelloConfig,
+    client: httpx.AsyncClient | None = None,
+) -> tuple[str | None, str | None]:
+    """Resolve the board id that owns the configured Trello list.
+
+    Args:
+        config: Trello configuration (key, token, list_id)
+        client: Optional pre-configured httpx.AsyncClient (for tests); when
+            provided, it is reused and not closed by this function.
+
+    Returns:
+        Tuple of (board_id, error). On success, error is None. On failure,
+        board_id is None and error describes the failure.
+    """
+    if client is not None:
+        return await _get_list_board_id(config, client)
+    async with httpx.AsyncClient() as new_client:
+        return await _get_list_board_id(config, new_client)
+
+
+async def _get_list_board_id(
+    config: TrelloConfig, client: httpx.AsyncClient
+) -> tuple[str | None, str | None]:
+    try:
+        response = await client.get(
+            f"{_TRELLO_API_BASE_URL}/lists/{config.list_id}/board",
+            params={"key": config.key, "token": config.token, "fields": "id"},
+            timeout=15,
+        )
+        response.raise_for_status()
+    except httpx.HTTPError as e:
+        return None, str(e)
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return None, "Invalid JSON response fetching list board"
+
+    board_id = payload.get("id")
+    if not board_id:
+        return None, "Board id missing from list board response"
+    return str(board_id), None
+
+
+async def get_latest_board_comment_id(
+    config: TrelloConfig,
+    board_id: str,
+    client: httpx.AsyncClient | None = None,
+) -> tuple[str | None, str | None]:
+    """Return the newest commentCard action id on a board, if any exist.
+
+    Used as the incremental cursor snapshot taken before a first-run full
+    scan, so comments posted during bootstrap are picked up on the next poll.
+
+    Args:
+        config: Trello configuration (key, token)
+        board_id: Trello board ID
+        client: Optional pre-configured httpx.AsyncClient (for tests); when
+            provided, it is reused and not closed by this function.
+
+    Returns:
+        Tuple of (action_id, error). action_id is None when the board has no
+        comments (or on failure); error is None on success.
+    """
+    if client is not None:
+        return await _get_latest_board_comment_id(config, board_id, client)
+    async with httpx.AsyncClient() as new_client:
+        return await _get_latest_board_comment_id(config, board_id, new_client)
+
+
+async def _get_latest_board_comment_id(
+    config: TrelloConfig, board_id: str, client: httpx.AsyncClient
+) -> tuple[str | None, str | None]:
+    comments, error = await _list_board_comments_page(
+        config, board_id, client, since=None, before=None, limit=1
+    )
+    if error is not None:
+        return None, error
+    if not comments:
+        return None, None
+    return comments[0].id, None
+
+
+async def list_board_comments_since(
+    config: TrelloConfig,
+    board_id: str,
+    since_action_id: str,
+    client: httpx.AsyncClient | None = None,
+) -> tuple[list[TrelloComment], str | None]:
+    """List commentCard actions on a board newer than since_action_id.
+
+    Pages with `before` when a response is full. Results are oldest-first so
+    replies are sent in the order they were written.
+
+    Args:
+        config: Trello configuration (key, token)
+        board_id: Trello board ID
+        since_action_id: Exclusive cursor (Trello action id or ISO date)
+        client: Optional pre-configured httpx.AsyncClient (for tests); when
+            provided, it is reused and not closed by this function.
+
+    Returns:
+        Tuple of (comments, error). On success, error is None. On failure,
+        comments is empty and error describes the failure.
+    """
+    if client is not None:
+        return await _list_board_comments_since(config, board_id, since_action_id, client)
+    async with httpx.AsyncClient() as new_client:
+        return await _list_board_comments_since(config, board_id, since_action_id, new_client)
+
+
+async def _list_board_comments_since(
+    config: TrelloConfig,
+    board_id: str,
+    since_action_id: str,
+    client: httpx.AsyncClient,
+) -> tuple[list[TrelloComment], str | None]:
+    newest_first: list[TrelloComment] = []
+    before: str | None = None
+    while True:
+        page, error = await _list_board_comments_page(
+            config,
+            board_id,
+            client,
+            since=since_action_id,
+            before=before,
+            limit=_BOARD_COMMENTS_PAGE_LIMIT,
+        )
+        if error is not None:
+            return [], error
+        newest_first.extend(page)
+        if len(page) < _BOARD_COMMENTS_PAGE_LIMIT:
+            break
+        before = page[-1].id
+
+    newest_first.reverse()
+    return newest_first, None
+
+
+async def get_card_list_and_name(
+    config: TrelloConfig,
+    card_id: str,
+    client: httpx.AsyncClient | None = None,
+) -> tuple[tuple[str, str] | None, str | None]:
+    """Fetch a card's current list id and name.
+
+    Used when a board commentCard action omits `data.list` so we can still
+    ignore comments that are not on the configured SMS list.
+
+    Args:
+        config: Trello configuration (key, token)
+        card_id: Trello card ID
+        client: Optional pre-configured httpx.AsyncClient (for tests); when
+            provided, it is reused and not closed by this function.
+
+    Returns:
+        Tuple of ((list_id, name), error). On success, error is None. On
+        failure, the pair is None and error describes the failure.
+    """
+    if client is not None:
+        return await _get_card_list_and_name(config, card_id, client)
+    async with httpx.AsyncClient() as new_client:
+        return await _get_card_list_and_name(config, card_id, new_client)
+
+
+async def _get_card_list_and_name(
+    config: TrelloConfig, card_id: str, client: httpx.AsyncClient
+) -> tuple[tuple[str, str] | None, str | None]:
+    try:
+        response = await client.get(
+            f"{_TRELLO_API_BASE_URL}/cards/{card_id}",
+            params={"key": config.key, "token": config.token, "fields": "idList,name"},
+            timeout=15,
+        )
+        response.raise_for_status()
+    except httpx.HTTPError as e:
+        return None, str(e)
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return None, "Invalid JSON response fetching card"
+
+    list_id = payload.get("idList")
+    if not list_id:
+        return None, "Card idList missing from response"
+    return (str(list_id), str(payload.get("name", ""))), None
+
+
+async def _list_board_comments_page(
+    config: TrelloConfig,
+    board_id: str,
+    client: httpx.AsyncClient,
+    *,
+    since: str | None,
+    before: str | None,
+    limit: int,
+) -> tuple[list[TrelloComment], str | None]:
+    params: dict[str, str | int] = {
+        "key": config.key,
+        "token": config.token,
+        "filter": "commentCard",
+        "fields": "id,type,date,data",
+        "limit": limit,
+    }
+    if since:
+        params["since"] = since
+    if before:
+        params["before"] = before
+
+    try:
+        response = await client.get(
+            f"{_TRELLO_API_BASE_URL}/boards/{board_id}/actions",
+            params=params,
+            timeout=15,
+        )
+        response.raise_for_status()
+    except httpx.HTTPError as e:
+        return [], str(e)
+
+    try:
+        raw_actions = response.json()
+    except ValueError:
+        return [], "Invalid JSON response listing board comments"
+
+    return [_comment_from_action(action) for action in raw_actions], None
+
+
+def _comment_from_action(action: dict[str, object]) -> TrelloComment:
+    data = action.get("data")
+    data_dict = data if isinstance(data, dict) else {}
+    card = data_dict.get("card")
+    card_dict = card if isinstance(card, dict) else {}
+    list_info = data_dict.get("list")
+    list_dict = list_info if isinstance(list_info, dict) else {}
+    return TrelloComment(
+        id=str(action.get("id", "")),
+        text=str(data_dict.get("text", "") or ""),
+        date=str(action.get("date", "") or ""),
+        card_id=str(card_dict.get("id", "") or ""),
+        card_name=str(card_dict.get("name", "") or ""),
+        list_id=str(list_dict.get("id", "") or ""),
+    )
 
 
 def _rate_limit_backoff_seconds(response: httpx.Response) -> float:

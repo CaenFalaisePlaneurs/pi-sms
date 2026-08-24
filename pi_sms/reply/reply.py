@@ -1,16 +1,17 @@
 """Trello-comment-driven SMS reply orchestration.
 
-Each poll: list open cards in the configured Trello list, then for every
-comment containing the reply trigger that has no matching sent confirmation
-yet, extract the phone number from the card name and the SMS body from the
-comment, send it via the modem, and post a new status comment (sent or
-failure) referencing the trigger comment's ID. Status is recorded as a new
-comment rather than an edit because Trello only lets the original author of
-a comment edit it, and a reply may be written by any team member.
+Each poll retries unfinished SQLite rows, then either bootstraps once (full
+scan of open cards, no cursor yet) or fetches new board `commentCard` actions
+since the persisted cursor. Trigger comments are sent via the modem and
+status is recorded as a new Trello comment (Trello only lets the original
+author edit a comment, and a reply may be written by any team member).
 """
 
+from __future__ import annotations
+
 import asyncio
-from datetime import datetime
+import sqlite3
+from datetime import UTC, datetime
 
 import httpx
 
@@ -22,9 +23,29 @@ from ..trello.trello import (
     TrelloComment,
     TrelloResult,
     fetch_emoji_map,
+    get_card_list_and_name,
+    get_latest_board_comment_id,
+    get_list_board_id,
+    list_board_comments_since,
     list_card_comments,
     list_open_cards,
     post_comment,
+)
+from .store import (
+    STATUS_PENDING,
+    STATUS_SENT,
+    STATUS_SENT_UNCONFIRMED,
+    ReplyRecord,
+    get_board_id,
+    get_last_action_id,
+    get_reply,
+    insert_reply,
+    list_retryable,
+    mark_failure_notice_posted,
+    open_store,
+    set_board_id,
+    set_last_action_id,
+    update_reply_status,
 )
 from .text import (
     build_failure_notice,
@@ -38,11 +59,11 @@ from .text import (
 
 # Posting a new status comment is always permitted for the daemon's own
 # token, so failures here should be rare and transient; retrying a few times
-# with backoff narrows the (much smaller than before) window where an SMS
-# sends successfully but the confirmation never gets recorded. Non-transient
-# failures (see _is_retryable) give up after a single attempt instead of
-# spending the full backoff schedule, so one bad reply can't stretch a poll
-# cycle past `poll_interval_seconds` and overlap with the next one.
+# with backoff narrows the window where an SMS sends successfully but the
+# confirmation never gets recorded. Non-transient failures (see _is_retryable)
+# give up after a single attempt instead of spending the full backoff
+# schedule, so one bad reply can't stretch a poll cycle past
+# `poll_interval_seconds` and overlap with the next one.
 _POST_COMMENT_ATTEMPTS = 5
 _BASE_RETRY_DELAY_SECONDS = 2
 _MAX_RETRY_DELAY_SECONDS = 15
@@ -91,21 +112,307 @@ async def _poll_and_send_replies(
     client: httpx.AsyncClient,
     emoji_cache_ref: dict[str, dict[str, str]],
 ) -> None:
+    conn = open_store(config.reply.sqlite_path)
+    try:
+        await _retry_unfinished(config, modem, client, conn, emoji_cache_ref)
+        await _ingest_new_comments(config, modem, client, conn, emoji_cache_ref)
+    finally:
+        conn.close()
+
+
+async def _retry_unfinished(
+    config: Config,
+    modem: HilinkClient,
+    client: httpx.AsyncClient,
+    conn: sqlite3.Connection,
+    emoji_cache_ref: dict[str, dict[str, str]],
+) -> None:
+    for record in list_retryable(conn):
+        await _attempt_send(config, modem, client, conn, record, emoji_cache_ref)
+
+
+async def _ingest_new_comments(
+    config: Config,
+    modem: HilinkClient,
+    client: httpx.AsyncClient,
+    conn: sqlite3.Connection,
+    emoji_cache_ref: dict[str, dict[str, str]],
+) -> None:
+    board_id = await _resolve_board_id(config, client, conn)
+    if board_id is None:
+        return
+
+    if get_last_action_id(conn) is None:
+        await _bootstrap(config, modem, client, conn, board_id, emoji_cache_ref)
+        return
+
+    await _incremental(config, modem, client, conn, board_id, emoji_cache_ref)
+
+
+async def _resolve_board_id(
+    config: Config, client: httpx.AsyncClient, conn: sqlite3.Connection
+) -> str | None:
+    cached = get_board_id(conn)
+    if cached:
+        return cached
+
+    board_id, error = await get_list_board_id(config.trello, client)
+    if error is not None or board_id is None:
+        debug_print(f"Reply poll: failed to resolve Trello board id: {error}")
+        return None
+    set_board_id(conn, board_id)
+    return board_id
+
+
+async def _bootstrap(
+    config: Config,
+    modem: HilinkClient,
+    client: httpx.AsyncClient,
+    conn: sqlite3.Connection,
+    board_id: str,
+    emoji_cache_ref: dict[str, dict[str, str]],
+) -> None:
+    cursor, cursor_error = await get_latest_board_comment_id(config.trello, board_id, client)
+    if cursor_error is not None:
+        debug_print(f"Reply poll: failed to snapshot board comment cursor: {cursor_error}")
+        return
+
     cards, error = await list_open_cards(config.trello, client)
     if error is not None:
         debug_print(f"Reply poll: failed to list Trello cards: {error}")
         return
 
+    scan_failed = False
     for card in cards:
         comments, comments_error = await list_card_comments(config.trello, card.id, client)
         if comments_error is not None:
             debug_print(f"Reply poll: failed to list comments on card {card.id}: {comments_error}")
+            scan_failed = True
             continue
 
         for comment in comments:
-            await _process_comment(
-                config, modem, client, card.name, card.id, comment, comments, emoji_cache_ref
+            await _ingest_trigger_from_card_comments(
+                config,
+                modem,
+                client,
+                conn,
+                card.id,
+                card.name,
+                comment,
+                comments,
+                emoji_cache_ref,
             )
+
+    # Leave the cursor unset so the next poll retries bootstrap for cards whose
+    # comment listing failed; already-recorded triggers are skipped via PK.
+    if not scan_failed:
+        set_last_action_id(conn, cursor if cursor is not None else _utc_now())
+
+
+async def _incremental(
+    config: Config,
+    modem: HilinkClient,
+    client: httpx.AsyncClient,
+    conn: sqlite3.Connection,
+    board_id: str,
+    emoji_cache_ref: dict[str, dict[str, str]],
+) -> None:
+    since = get_last_action_id(conn)
+    if since is None:
+        return
+
+    comments, error = await list_board_comments_since(config.trello, board_id, since, client)
+    if error is not None:
+        debug_print(f"Reply poll: failed to list new board comments: {error}")
+        return
+
+    newest_id = since
+    for comment in comments:
+        newest_id = comment.id
+        await _ingest_board_comment(config, modem, client, conn, comment, emoji_cache_ref)
+
+    if newest_id != since:
+        set_last_action_id(conn, newest_id)
+
+
+async def _ingest_trigger_from_card_comments(
+    config: Config,
+    modem: HilinkClient,
+    client: httpx.AsyncClient,
+    conn: sqlite3.Connection,
+    card_id: str,
+    card_name: str,
+    comment: TrelloComment,
+    comments: list[TrelloComment],
+    emoji_cache_ref: dict[str, dict[str, str]],
+) -> None:
+    parsed = parse_reply(comment.text, config.reply.trigger, config.reply.case_insensitive)
+    if parsed is None:
+        return
+
+    if get_reply(conn, comment.id) is not None:
+        return
+
+    if is_reply_already_sent(comments, comment.id, config.reply):
+        insert_reply(
+            conn,
+            trigger_comment_id=comment.id,
+            card_id=card_id,
+            card_name=card_name,
+            body=parsed.body,
+            status=STATUS_SENT,
+        )
+        return
+
+    inserted = insert_reply(
+        conn,
+        trigger_comment_id=comment.id,
+        card_id=card_id,
+        card_name=card_name,
+        body=parsed.body,
+        status=STATUS_PENDING,
+        failure_notice_posted=has_failure_notice(comments, comment.id, config.reply),
+    )
+    if not inserted:
+        return
+
+    record = get_reply(conn, comment.id)
+    if record is None:
+        return
+    await _attempt_send(config, modem, client, conn, record, emoji_cache_ref)
+
+
+async def _ingest_board_comment(
+    config: Config,
+    modem: HilinkClient,
+    client: httpx.AsyncClient,
+    conn: sqlite3.Connection,
+    comment: TrelloComment,
+    emoji_cache_ref: dict[str, dict[str, str]],
+) -> None:
+    parsed = parse_reply(comment.text, config.reply.trigger, config.reply.case_insensitive)
+    if parsed is None:
+        return
+
+    if get_reply(conn, comment.id) is not None:
+        return
+
+    card_id, card_name, on_list = await _resolve_sms_list_card(config, client, comment)
+    if not on_list or card_id is None or card_name is None:
+        return
+
+    inserted = insert_reply(
+        conn,
+        trigger_comment_id=comment.id,
+        card_id=card_id,
+        card_name=card_name,
+        body=parsed.body,
+        status=STATUS_PENDING,
+    )
+    if not inserted:
+        return
+
+    record = get_reply(conn, comment.id)
+    if record is None:
+        return
+    await _attempt_send(config, modem, client, conn, record, emoji_cache_ref)
+
+
+async def _resolve_sms_list_card(
+    config: Config, client: httpx.AsyncClient, comment: TrelloComment
+) -> tuple[str | None, str | None, bool]:
+    """Return (card_id, card_name, on_sms_list) for a board comment."""
+    list_id = comment.list_id
+    card_id = comment.card_id
+    card_name = comment.card_name
+
+    if list_id:
+        return card_id or None, card_name or None, list_id == config.trello.list_id
+
+    if not card_id:
+        return None, None, False
+
+    location, error = await get_card_list_and_name(config.trello, card_id, client)
+    if error is not None or location is None:
+        debug_print(f"Reply poll: failed to resolve list for card {card_id}: {error}")
+        return None, None, False
+
+    fetched_list_id, fetched_name = location
+    return card_id, fetched_name or card_name, fetched_list_id == config.trello.list_id
+
+
+async def _attempt_send(
+    config: Config,
+    modem: HilinkClient,
+    client: httpx.AsyncClient,
+    conn: sqlite3.Connection,
+    record: ReplyRecord,
+    emoji_cache_ref: dict[str, dict[str, str]],
+) -> None:
+    if record.status == STATUS_SENT:
+        return
+
+    phone = find_replyable_phone(record.card_name)
+    if phone is None:
+        debug_print(f"Reply poll: no replyable phone found in card name '{record.card_name}'")
+        return
+
+    if record.status == STATUS_SENT_UNCONFIRMED:
+        await _post_sent_confirmation(config, client, conn, record, phone)
+        return
+
+    body = await _resolve_body(record.body, client, emoji_cache_ref)
+    result = await modem.send_sms(phone, body)
+    if result.success:
+        update_reply_status(conn, record.trigger_comment_id, STATUS_SENT_UNCONFIRMED)
+        await _post_sent_confirmation(
+            config,
+            client,
+            conn,
+            ReplyRecord(
+                trigger_comment_id=record.trigger_comment_id,
+                card_id=record.card_id,
+                card_name=record.card_name,
+                body=record.body,
+                status=STATUS_SENT_UNCONFIRMED,
+                failure_notice_posted=record.failure_notice_posted,
+                created_at=record.created_at,
+                updated_at=record.updated_at,
+            ),
+            phone,
+        )
+        return
+
+    debug_print(f"Failed to send SMS reply to {phone}: {result.error}")
+    if record.failure_notice_posted:
+        return
+    notice = build_failure_notice(record.trigger_comment_id, config.reply)
+    post_result = await _post_status_comment_with_retries(config, record.card_id, notice, client)
+    if post_result.success:
+        mark_failure_notice_posted(conn, record.trigger_comment_id)
+
+
+async def _post_sent_confirmation(
+    config: Config,
+    client: httpx.AsyncClient,
+    conn: sqlite3.Connection,
+    record: ReplyRecord,
+    phone: str,
+) -> None:
+    confirmation = build_sent_confirmation(
+        record.trigger_comment_id, config.reply, datetime.now().astimezone()
+    )
+    post_result = await _post_status_comment_with_retries(
+        config, record.card_id, confirmation, client
+    )
+    if post_result.success:
+        update_reply_status(conn, record.trigger_comment_id, STATUS_SENT)
+        print(f"Sent SMS reply to {phone}")
+        return
+    print(
+        f"Sent SMS reply to {phone} but failed to record sent confirmation after retries "
+        f"(will retry confirmation next poll, without resending): {post_result.error}"
+    )
 
 
 async def _resolve_body(
@@ -124,51 +431,6 @@ async def _resolve_body(
             emoji_cache_ref["map"] = emoji_map
 
     return resolve_emoji_shortcodes(body, emoji_map or {})
-
-
-async def _process_comment(
-    config: Config,
-    modem: HilinkClient,
-    client: httpx.AsyncClient,
-    card_name: str,
-    card_id: str,
-    comment: TrelloComment,
-    comments: list[TrelloComment],
-    emoji_cache_ref: dict[str, dict[str, str]],
-) -> None:
-    parsed = parse_reply(comment.text, config.reply.trigger, config.reply.case_insensitive)
-    if parsed is None:
-        return
-
-    if is_reply_already_sent(comments, comment.id, config.reply):
-        return
-
-    phone = find_replyable_phone(card_name)
-    if phone is None:
-        debug_print(f"Reply poll: no replyable phone found in card name '{card_name}'")
-        return
-
-    body = await _resolve_body(parsed.body, client, emoji_cache_ref)
-    result = await modem.send_sms(phone, body)
-    if result.success:
-        confirmation = build_sent_confirmation(
-            comment.id, config.reply, datetime.now().astimezone()
-        )
-        post_result = await _post_status_comment_with_retries(config, card_id, confirmation, client)
-        if post_result.success:
-            print(f"Sent SMS reply to {phone}")
-        else:
-            print(
-                f"Sent SMS reply to {phone} but failed to record sent confirmation after retries "
-                f"(next poll may resend): {post_result.error}"
-            )
-        return
-
-    debug_print(f"Failed to send SMS reply to {phone}: {result.error}")
-    if has_failure_notice(comments, comment.id, config.reply):
-        return
-    notice = build_failure_notice(comment.id, config.reply)
-    await _post_status_comment_with_retries(config, card_id, notice, client)
 
 
 async def _post_status_comment_with_retries(
@@ -211,3 +473,7 @@ def _retry_delay_seconds(result: TrelloResult, attempt: int) -> float:
     if result.retry_after_seconds is not None:
         return result.retry_after_seconds
     return float(min(_BASE_RETRY_DELAY_SECONDS * 2 ** (attempt - 1), _MAX_RETRY_DELAY_SECONDS))
+
+
+def _utc_now() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
