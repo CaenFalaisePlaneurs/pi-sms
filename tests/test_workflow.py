@@ -21,8 +21,24 @@ def _config() -> Config:
     )
 
 
-def _message(index: str, content: str = "Hello", phone: str = "+33600000000") -> SmsMessage:
-    return SmsMessage(index=index, phone=phone, content=content, date="d", smstat="0")
+def _message(
+    index: str,
+    content: str = "Hello",
+    phone: str = "+33600000000",
+    *,
+    date: str = "d",
+    sms_type: str = "1",
+    indexes: tuple[str, ...] = (),
+) -> SmsMessage:
+    return SmsMessage(
+        index=index,
+        phone=phone,
+        content=content,
+        date=date,
+        smstat="0",
+        sms_type=sms_type,
+        indexes=indexes,
+    )
 
 
 @pytest.mark.asyncio
@@ -197,3 +213,45 @@ async def test_poll_and_process_skips_mms_handling_when_disabled() -> None:
 
     modem.send_sms.assert_not_awaited()
     modem.delete_sms.assert_awaited_once_with("1")
+
+
+@pytest.mark.asyncio
+async def test_poll_and_process_leaves_young_multipart_on_modem() -> None:
+    modem = AsyncMock()
+    modem.list_inbox.return_value = [
+        _message("40017", "Hello ", date="2099-01-01 00:00:00", sms_type="2"),
+    ]
+    sms_filter = SmsFilter(exclude_patterns=[])
+    is_running_ref = {"value": False}
+
+    with patch("pi_sms.core.workflow.record_sms", new=AsyncMock()) as mock_record_sms:
+        await poll_and_process(_config(), modem, sms_filter, is_running_ref)
+
+    mock_record_sms.assert_not_awaited()
+    modem.delete_sms.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_poll_and_process_records_joined_multipart_and_deletes_all_indexes() -> None:
+    modem = AsyncMock()
+    modem.list_inbox.return_value = [
+        _message("40019", "two", date="2020-01-01 00:00:01", sms_type="2"),
+        _message("40018", "one", date="2020-01-01 00:00:00", sms_type="2"),
+    ]
+    modem.delete_sms.return_value = HilinkResult(success=True)
+    sms_filter = SmsFilter(exclude_patterns=[])
+    is_running_ref = {"value": False}
+
+    with patch(
+        "pi_sms.core.workflow.record_sms",
+        new=AsyncMock(return_value=TrelloResult(success=True, card_id="c1", action="created")),
+    ) as mock_record_sms:
+        await poll_and_process(_config(), modem, sms_filter, is_running_ref)
+
+    mock_record_sms.assert_awaited_once()
+    recorded = mock_record_sms.await_args.args[1]
+    assert recorded.content == "onetwo"
+    assert recorded.indexes == ("40018", "40019")
+    modem.delete_sms.assert_any_await("40018")
+    modem.delete_sms.assert_any_await("40019")
+    assert modem.delete_sms.await_count == 2

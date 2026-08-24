@@ -14,6 +14,8 @@
 ### Fixed
 
 - The one-command installer now force-reinstalls `pi-sms` (without reinstalling unchanged dependencies) when it detects an existing installation, since a plain `pip install git+URL` silently skips reinstalling an already-installed package name even when the underlying commit changed
+- Trello reply comments containing an emoji (e.g. `:heart:`) no longer send the literal shortcode text as the SMS body; Trello stores comment text as markdown source, so typing or autocompleting an emoji leaves the `:shortcode:` syntax in the raw API text, and it is now resolved back into the actual character before sending
+- Long SMS that arrive as several modem inbox parts are posted as a single Trello comment: young multipart segments are left on the modem so firmware can merge them, and leftover parts from the same sender are joined in date-then-index order
 
 ## [0.1.0] - 2026-07-16
 

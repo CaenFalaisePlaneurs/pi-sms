@@ -10,11 +10,14 @@ daemon's own token) that references the trigger comment's ID, instead of
 editing the trigger comment itself.
 """
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 
 from ..core.config import ReplyConfig
 from ..trello.trello import TrelloComment
+
+_SHORTCODE_PATTERN = re.compile(r":([a-zA-Z0-9_+\-]+):")
 
 
 @dataclass
@@ -51,6 +54,32 @@ def parse_reply(
     if not body:
         return None
     return ReplyParse(attribution=attribution, body=body)
+
+
+def contains_emoji_shortcode(text: str) -> bool:
+    """Return True if text contains a `:name:`-style token that could be an emoji shortcode.
+
+    Used as a cheap pre-check so the reply path only bothers fetching Trello's
+    emoji map when there's something to resolve.
+    """
+    return bool(_SHORTCODE_PATTERN.search(text))
+
+
+def resolve_emoji_shortcodes(text: str, emoji_map: dict[str, str]) -> str:
+    """Replace Trello emoji shortcodes in text with their actual Unicode character.
+
+    Trello stores comment text as markdown source, so typing or autocompling
+    an emoji leaves `:shortname:` syntax in the raw API text instead of the
+    rendered glyph; this resolves it back before the text is sent as an SMS.
+    Shortcodes not present in `emoji_map` (typos, unrelated colon-wrapped
+    text) are left untouched.
+    """
+
+    def _replace(match: re.Match[str]) -> str:
+        native = emoji_map.get(match.group(1).lower())
+        return native if native is not None else match.group(0)
+
+    return _SHORTCODE_PATTERN.sub(_replace, text)
 
 
 def format_retry_delay(seconds: int) -> str:

@@ -44,8 +44,12 @@ def test_parse_sms_list_returns_all_messages() -> None:
     assert messages[0].content == "Hello there"
     assert messages[0].date == "2026-07-15 19:35:12"
     assert messages[0].smstat == "0"
+    assert messages[0].sms_type == "1"
+    assert messages[0].indexes == ("1",)
     assert messages[1].index == "2"
     assert messages[1].content.startswith('Messagerie "666" Free')
+    assert messages[1].sms_type == "1"
+    assert messages[1].indexes == ("2",)
 
 
 def test_parse_sms_list_empty_inbox() -> None:
@@ -62,6 +66,30 @@ def test_parse_sms_list_skips_message_without_index() -> None:
     xml_text = "<response><Messages><Message><Phone>1</Phone></Message></Messages></response>"
 
     assert parse_sms_list(xml_text) == []
+
+
+def test_parse_sms_list_reads_multipart_sms_type() -> None:
+    xml_text = """<?xml version="1.0" encoding="UTF-8"?>
+<response>
+<Count>1</Count>
+<Messages>
+<Message>
+<Smstat>0</Smstat>
+<Index>40017</Index>
+<Phone>+33612345678</Phone>
+<Content>part one</Content>
+<Date>2026-08-24 10:00:00</Date>
+<SmsType>2</SmsType>
+</Message>
+</Messages>
+</response>
+"""
+
+    messages = parse_sms_list(xml_text)
+
+    assert len(messages) == 1
+    assert messages[0].sms_type == "2"
+    assert messages[0].indexes == ("40017",)
 
 
 def _message(content: str, phone: str = "+33612345678") -> SmsMessage:

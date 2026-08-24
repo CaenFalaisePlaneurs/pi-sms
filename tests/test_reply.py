@@ -12,10 +12,12 @@ from pi_sms.reply.reply import poll_and_send_replies
 from pi_sms.reply.text import (
     build_failure_notice,
     build_sent_confirmation,
+    contains_emoji_shortcode,
     format_retry_delay,
     has_failure_notice,
     is_reply_already_sent,
     parse_reply,
+    resolve_emoji_shortcodes,
 )
 from pi_sms.trello.trello import TrelloCard, TrelloComment, TrelloResult
 
@@ -78,6 +80,35 @@ def test_parse_reply_without_attribution() -> None:
     assert parsed is not None
     assert parsed.attribution == ""
     assert parsed.body == "hello there"
+
+
+# --- contains_emoji_shortcode / resolve_emoji_shortcodes ---
+
+
+def test_contains_emoji_shortcode_true_when_present() -> None:
+    assert contains_emoji_shortcode("reponse avec emotion :+1: :heart:") is True
+
+
+def test_contains_emoji_shortcode_false_when_absent() -> None:
+    assert contains_emoji_shortcode("just a normal reply") is False
+
+
+def test_resolve_emoji_shortcodes_replaces_known_shortcodes() -> None:
+    emoji_map = {"+1": "\U0001f44d", "heart": "\u2764\ufe0f"}
+
+    resolved = resolve_emoji_shortcodes("reponse avec emotion :+1: :heart:", emoji_map)
+
+    assert resolved == "reponse avec emotion \U0001f44d \u2764\ufe0f"
+
+
+def test_resolve_emoji_shortcodes_leaves_unknown_shortcode_untouched() -> None:
+    resolved = resolve_emoji_shortcodes("see :unknown-thing:", {"heart": "\u2764\ufe0f"})
+
+    assert resolved == "see :unknown-thing:"
+
+
+def test_resolve_emoji_shortcodes_is_noop_without_any_shortcode() -> None:
+    assert resolve_emoji_shortcodes("just text", {"heart": "\u2764\ufe0f"}) == "just text"
 
 
 # --- format_retry_delay ---
@@ -446,6 +477,102 @@ async def test_poll_and_send_replies_gives_up_after_exhausting_confirmation_retr
         await poll_and_send_replies(_config(), modem, is_running_ref, client=httpx.AsyncClient())
 
     assert mock_post_comment.await_count == 5
+
+
+@pytest.mark.asyncio
+async def test_poll_and_send_replies_resolves_emoji_shortcodes_before_sending() -> None:
+    modem = AsyncMock()
+    modem.send_sms.return_value = HilinkResult(success=True)
+    is_running_ref = {"value": False}
+    emoji_map = {"+1": "\U0001f44d", "heart": "\u2764\ufe0f"}
+
+    with (
+        patch(
+            "pi_sms.reply.reply.list_open_cards",
+            new=AsyncMock(return_value=([_card()], None)),
+        ),
+        patch(
+            "pi_sms.reply.reply.list_card_comments",
+            new=AsyncMock(
+                return_value=([_comment(">>RE: reponse avec emotion :+1: :heart:")], None)
+            ),
+        ),
+        patch("pi_sms.reply.reply.post_comment", new=AsyncMock()),
+        patch(
+            "pi_sms.reply.reply.fetch_emoji_map", new=AsyncMock(return_value=(emoji_map, None))
+        ) as mock_fetch_emoji_map,
+    ):
+        await poll_and_send_replies(_config(), modem, is_running_ref, client=httpx.AsyncClient())
+
+    mock_fetch_emoji_map.assert_awaited_once()
+    modem.send_sms.assert_awaited_once_with(
+        "+33612345678", "reponse avec emotion \U0001f44d \u2764\ufe0f"
+    )
+
+
+@pytest.mark.asyncio
+async def test_poll_and_send_replies_skips_emoji_map_fetch_without_shortcode() -> None:
+    modem = AsyncMock()
+    modem.send_sms.return_value = HilinkResult(success=True)
+    is_running_ref = {"value": False}
+
+    with (
+        patch(
+            "pi_sms.reply.reply.list_open_cards",
+            new=AsyncMock(return_value=([_card()], None)),
+        ),
+        patch(
+            "pi_sms.reply.reply.list_card_comments",
+            new=AsyncMock(return_value=([_comment(">>RE: Toujours interessé?")], None)),
+        ),
+        patch("pi_sms.reply.reply.post_comment", new=AsyncMock()),
+        patch("pi_sms.reply.reply.fetch_emoji_map", new=AsyncMock()) as mock_fetch_emoji_map,
+    ):
+        await poll_and_send_replies(_config(), modem, is_running_ref, client=httpx.AsyncClient())
+
+    mock_fetch_emoji_map.assert_not_awaited()
+    modem.send_sms.assert_awaited_once_with("+33612345678", "Toujours interessé?")
+
+
+@pytest.mark.asyncio
+async def test_poll_and_send_replies_reuses_cached_emoji_map_across_calls() -> None:
+    modem = AsyncMock()
+    modem.send_sms.return_value = HilinkResult(success=True)
+    is_running_ref = {"value": False}
+    emoji_cache_ref: dict[str, dict[str, str]] = {}
+    emoji_map = {"heart": "\u2764\ufe0f"}
+
+    with (
+        patch(
+            "pi_sms.reply.reply.list_open_cards",
+            new=AsyncMock(return_value=([_card()], None)),
+        ),
+        patch(
+            "pi_sms.reply.reply.list_card_comments",
+            new=AsyncMock(return_value=([_comment(">>RE: salut :heart:")], None)),
+        ),
+        patch("pi_sms.reply.reply.post_comment", new=AsyncMock()),
+        patch(
+            "pi_sms.reply.reply.fetch_emoji_map", new=AsyncMock(return_value=(emoji_map, None))
+        ) as mock_fetch_emoji_map,
+    ):
+        await poll_and_send_replies(
+            _config(),
+            modem,
+            is_running_ref,
+            client=httpx.AsyncClient(),
+            emoji_cache_ref=emoji_cache_ref,
+        )
+        is_running_ref["value"] = False
+        await poll_and_send_replies(
+            _config(),
+            modem,
+            is_running_ref,
+            client=httpx.AsyncClient(),
+            emoji_cache_ref=emoji_cache_ref,
+        )
+
+    mock_fetch_emoji_map.assert_awaited_once()
 
 
 @pytest.mark.asyncio

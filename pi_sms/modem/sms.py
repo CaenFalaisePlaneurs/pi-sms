@@ -16,6 +16,15 @@ class SmsMessage:
     content: str
     date: str
     smstat: str
+    sms_type: str = "1"
+    # Every modem inbox index that makes up this message; a concatenated SMS
+    # that we assembled from leftover parts lists all of them so the workflow
+    # can delete each segment after a successful Trello post.
+    indexes: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.indexes:
+            self.indexes = (self.index,)
 
 
 def parse_sms_list(xml_text: str) -> list[SmsMessage]:
@@ -39,6 +48,7 @@ def parse_sms_list(xml_text: str) -> list[SmsMessage]:
         content = _text(message_el, "Content")
         date = _text(message_el, "Date")
         smstat = _text(message_el, "Smstat")
+        sms_type = _text(message_el, "SmsType")
         if index is None:
             continue
         messages.append(
@@ -48,6 +58,7 @@ def parse_sms_list(xml_text: str) -> list[SmsMessage]:
                 content=content or "",
                 date=date or "",
                 smstat=smstat or "",
+                sms_type=sms_type or "1",
             )
         )
     return messages

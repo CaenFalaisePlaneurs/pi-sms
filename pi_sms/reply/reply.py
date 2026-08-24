@@ -21,6 +21,7 @@ from ..modem.sms import find_replyable_phone
 from ..trello.trello import (
     TrelloComment,
     TrelloResult,
+    fetch_emoji_map,
     list_card_comments,
     list_open_cards,
     post_comment,
@@ -28,9 +29,11 @@ from ..trello.trello import (
 from .text import (
     build_failure_notice,
     build_sent_confirmation,
+    contains_emoji_shortcode,
     has_failure_notice,
     is_reply_already_sent,
     parse_reply,
+    resolve_emoji_shortcodes,
 )
 
 # Posting a new status comment is always permitted for the daemon's own
@@ -50,6 +53,7 @@ async def poll_and_send_replies(
     modem: HilinkClient,
     is_running_ref: dict[str, bool],
     client: httpx.AsyncClient | None = None,
+    emoji_cache_ref: dict[str, dict[str, str]] | None = None,
 ) -> None:
     """Poll Trello comments for reply triggers and send matching SMS.
 
@@ -59,24 +63,33 @@ async def poll_and_send_replies(
         is_running_ref: Dictionary with 'value' key to prevent concurrent polls
         client: Optional pre-configured httpx.AsyncClient (for tests); when
             provided, it is reused and not closed by this function.
+        emoji_cache_ref: Dictionary caching the Trello shortcode-to-emoji map
+            under the "map" key across polls; when not provided, a fresh
+            (per-poll) cache is used, so the map is refetched every call.
     """
     if is_running_ref.get("value", False):
         debug_print("Reply poll skipped: already running (previous poll still in progress)")
         return
 
+    if emoji_cache_ref is None:
+        emoji_cache_ref = {}
+
     is_running_ref["value"] = True
     try:
         if client is not None:
-            await _poll_and_send_replies(config, modem, client)
+            await _poll_and_send_replies(config, modem, client, emoji_cache_ref)
         else:
             async with httpx.AsyncClient() as new_client:
-                await _poll_and_send_replies(config, modem, new_client)
+                await _poll_and_send_replies(config, modem, new_client, emoji_cache_ref)
     finally:
         is_running_ref["value"] = False
 
 
 async def _poll_and_send_replies(
-    config: Config, modem: HilinkClient, client: httpx.AsyncClient
+    config: Config,
+    modem: HilinkClient,
+    client: httpx.AsyncClient,
+    emoji_cache_ref: dict[str, dict[str, str]],
 ) -> None:
     cards, error = await list_open_cards(config.trello, client)
     if error is not None:
@@ -90,7 +103,27 @@ async def _poll_and_send_replies(
             continue
 
         for comment in comments:
-            await _process_comment(config, modem, client, card.name, card.id, comment, comments)
+            await _process_comment(
+                config, modem, client, card.name, card.id, comment, comments, emoji_cache_ref
+            )
+
+
+async def _resolve_body(
+    body: str, client: httpx.AsyncClient, emoji_cache_ref: dict[str, dict[str, str]]
+) -> str:
+    """Resolve Trello emoji shortcodes (e.g. `:heart:`) in a reply body into real characters."""
+    if not contains_emoji_shortcode(body):
+        return body
+
+    emoji_map = emoji_cache_ref.get("map")
+    if not emoji_map:
+        emoji_map, error = await fetch_emoji_map(client)
+        if error is not None:
+            debug_print(f"Reply poll: failed to fetch Trello emoji map: {error}")
+        if emoji_map:
+            emoji_cache_ref["map"] = emoji_map
+
+    return resolve_emoji_shortcodes(body, emoji_map or {})
 
 
 async def _process_comment(
@@ -101,6 +134,7 @@ async def _process_comment(
     card_id: str,
     comment: TrelloComment,
     comments: list[TrelloComment],
+    emoji_cache_ref: dict[str, dict[str, str]],
 ) -> None:
     parsed = parse_reply(comment.text, config.reply.trigger, config.reply.case_insensitive)
     if parsed is None:
@@ -114,7 +148,8 @@ async def _process_comment(
         debug_print(f"Reply poll: no replyable phone found in card name '{card_name}'")
         return
 
-    result = await modem.send_sms(phone, parsed.body)
+    body = await _resolve_body(parsed.body, client, emoji_cache_ref)
+    result = await modem.send_sms(phone, body)
     if result.success:
         confirmation = build_sent_confirmation(
             comment.id, config.reply, datetime.now().astimezone()

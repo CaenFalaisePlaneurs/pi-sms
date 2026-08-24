@@ -8,6 +8,7 @@ from pi_sms.modem.sms import SmsMessage
 from pi_sms.trello.trello import (
     add_comment,
     create_card,
+    fetch_emoji_map,
     find_card_id_for_phone,
     list_card_comments,
     list_open_cards,
@@ -380,6 +381,51 @@ async def test_post_comment_network_error_has_no_status_code() -> None:
     assert result.success is False
     assert result.status_code is None
     assert result.retry_after_seconds is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_emoji_map_flattens_short_names_to_native_character() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/1/emoji"
+        return httpx.Response(
+            200,
+            json={
+                "trello": [
+                    {
+                        "native": "\U0001f44d",
+                        "shortName": "thumbsup",
+                        "shortNames": ["thumbsup", "+1", "yes"],
+                    },
+                    {
+                        "native": "\u2764\ufe0f",
+                        "shortName": "heart",
+                        "shortNames": ["heart"],
+                    },
+                ]
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    emoji_map, error = await fetch_emoji_map(client=client)
+
+    assert error is None
+    assert emoji_map["+1"] == "\U0001f44d"
+    assert emoji_map["yes"] == "\U0001f44d"
+    assert emoji_map["heart"] == "\u2764\ufe0f"
+
+
+@pytest.mark.asyncio
+async def test_fetch_emoji_map_returns_empty_map_on_http_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="server error")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    emoji_map, error = await fetch_emoji_map(client=client)
+
+    assert emoji_map == {}
+    assert error is not None
 
 
 @pytest.mark.asyncio

@@ -250,6 +250,57 @@ async def find_card_id_for_phone(
     return None, None
 
 
+async def fetch_emoji_map(
+    client: httpx.AsyncClient | None = None,
+) -> tuple[dict[str, str], str | None]:
+    """Fetch Trello's emoji list and flatten it into a shortcode-to-character map.
+
+    Trello stores comment text as markdown source: typing or autocompleting an
+    emoji inserts `:shortname:` syntax, and only Trello's own client renders
+    that into the actual glyph. The REST API's raw comment text keeps the
+    markdown form, so a reply comment containing an emoji arrives here as
+    literal `:heart:` text; this map lets the reply path resolve it back into
+    the real character before sending it as an SMS.
+
+    This endpoint is public and does not require a key/token.
+
+    Args:
+        client: Optional pre-configured httpx.AsyncClient (for tests); when
+            provided, it is reused and not closed by this function.
+
+    Returns:
+        Tuple of (shortcode -> native character map, error). On success,
+        error is None. On failure, the map is empty and error describes the
+        failure.
+    """
+    if client is not None:
+        return await _fetch_emoji_map(client)
+    async with httpx.AsyncClient() as new_client:
+        return await _fetch_emoji_map(new_client)
+
+
+async def _fetch_emoji_map(client: httpx.AsyncClient) -> tuple[dict[str, str], str | None]:
+    try:
+        response = await client.get(f"{_TRELLO_API_BASE_URL}/emoji", timeout=15)
+        response.raise_for_status()
+    except httpx.HTTPError as e:
+        return {}, str(e)
+
+    try:
+        raw_emoji = response.json()
+    except ValueError:
+        return {}, "Invalid JSON response listing emoji"
+
+    emoji_map: dict[str, str] = {}
+    for entry in raw_emoji.get("trello", []):
+        native = entry.get("native")
+        if not native:
+            continue
+        for short_name in entry.get("shortNames", []):
+            emoji_map[short_name.lower()] = native
+    return emoji_map, None
+
+
 async def list_card_comments(
     config: TrelloConfig,
     card_id: str,

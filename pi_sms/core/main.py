@@ -44,6 +44,7 @@ config: Config | None = None
 _shutdown_event: asyncio.Event | None = None
 _is_running = {"value": False}
 _reply_is_running = {"value": False}
+_emoji_cache: dict[str, dict[str, str]] = {}
 
 
 def shutdown(signum: int, frame: object) -> None:  # noqa: ARG001
@@ -111,7 +112,7 @@ async def run_service(config_path: str | None = None) -> None:
 
     async def _poll_and_send_replies_wrapper() -> None:
         assert config is not None
-        await poll_and_send_replies(config, modem, _reply_is_running)
+        await poll_and_send_replies(config, modem, _reply_is_running, emoji_cache_ref=_emoji_cache)
 
     # Run an initial poll immediately, then start the recurring schedule
     await _poll_and_process_wrapper()

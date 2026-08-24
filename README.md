@@ -8,6 +8,7 @@ A Python 3.13 background service for Raspberry Pi that receives SMS via a Huawei
 - **Pattern filtering**: Discards messages matching configured regex patterns (e.g. Free Mobile voicemail notifications) without creating a card
 - **MMS auto-reply**: The modem cannot retrieve MMS content, so an incoming MMS is detected (empty content from a real sender number) and answered with an SMS asking the sender to resend as plain text or by email; no Trello card is created for the MMS itself
 - **Trello conversation cards**: One card per phone number, in a configured Trello list; the first SMS creates the card and later SMS from the same number are appended as comments
+- **Multipart SMS assembly**: Long SMS that the modem exposes as several inbox parts are left to merge, then posted as a single card comment in part order
 - **Reply from Trello**: A team member replies to a conversation by writing a comment with a trigger marker; the daemon sends the text after it as an SMS to the card's phone number and posts a new status comment confirming it (or noting a pending retry on failure), regardless of which Trello login wrote the reply
 - **Self-cleaning inbox**: Each message is deleted from the modem once handled (card created, or filtered out) so the modem's limited SMS storage never fills up; a Trello failure leaves the message for the next poll to retry
 - **Isolated modem networking**: Setup provisions a static, never-default network profile for the modem's USB interface, bound by MAC address so it's reachable on every boot without ever disrupting the Pi's LAN connection
@@ -25,7 +26,8 @@ A Python 3.13 background service for Raspberry Pi that receives SMS via a Huawei
 ```mermaid
 flowchart LR
   sched["Poll every N seconds"] --> list["List SMS inbox (HiLink API)"]
-  list --> mms{"Empty content (MMS)?"}
+  list --> assemble["Assemble multipart SMS"]
+  assemble --> mms{"Empty content (MMS)?"}
   mms -->|"yes, replyable sender"| reply["Send auto-reply SMS"] --> del0["Delete from modem"]
   mms -->|"yes, non-replyable sender"| del0
   mms -->|"no"| filt{"Matches exclude pattern?"}
@@ -37,6 +39,8 @@ flowchart LR
   card --> del2
   find -->|"lookup failed"| retry["Leave on modem, retry next poll"]
 ```
+
+A long SMS arrives at the modem as several inbox parts (`SmsType=2`). The firmware can merge them within a couple of seconds if the parts are left in place, so a poll that catches them while they are still arriving skips that sender and retries next interval. If parts are still separate after that window, they are joined in date-then-index order into one message before Trello sees them, so a conversation card gets a single comment with the full text.
 
 MMS content cannot be retrieved via the HiLink API: an incoming MMS shows up as an inbox message with empty content but a real sender number. When detected, a configurable auto-reply SMS is sent asking the sender to resend as plain text or by email, then the message is deleted; senders that cannot receive a reply (alphanumeric IDs, short codes) are discarded without a reply. No Trello card is created for an MMS itself, so a plain-text follow-up from the sender is what creates or comments on their card.
 
@@ -251,9 +255,11 @@ curl -s -o /dev/null -w '%{http_code}\n' http://192.168.8.1/
 
 ### Emoji and MMS
 
-The E3372 HiLink firmware decodes incoming SMS internally before exposing them through its web API, and that internal decoder is limited to UCS-2 (the Basic Multilingual Plane, code points up to U+FFFF). Symbols within that range (e.g. ❤, ★, most non-Latin scripts) come through correctly. Most modern colorful emoji live outside it and require a UTF-16 surrogate pair to represent; the modem's firmware blanks those out to empty space before the message ever reaches the API, so there is no data left for `pi-sms` to recover. The modem's `sms-list-pdu` endpoint, which would expose the raw undecoded PDU (and let `pi-sms` decode it correctly), returns error `100002` (not supported) on this firmware.
+The E3372 HiLink firmware decodes incoming SMS internally before exposing them through its web API, and that internal decoder is limited to UCS-2 (the Basic Multilingual Plane, code points up to U+FFFF). Symbols within that range (e.g. ❤, ★, most non-Latin scripts) come through correctly. Most modern colorful emoji live outside it and require a UTF-16 surrogate pair to represent; the modem's firmware blanks those out to empty space before the message ever reaches the API, so there is no data left for `pi-sms` to recover. The modem's `sms-list-pdu` endpoint, which would expose the raw undecoded PDU (and let `pi-sms` decode it correctly, including concatenated-SMS UDH part numbers), returns error `100002` (not supported) on this firmware. Long SMS are therefore assembled from the decoded inbox parts instead: young `SmsType=2` segments are left on the modem so firmware can merge them, and leftover parts from the same sender are joined in date-then-index order into one Trello comment.
 
 MMS is a separate transport (WAP-push notification plus a fetch from the carrier's MMSC over mobile data) that the HiLink API does not expose at all; incoming MMS surface in the inbox as a message with an empty `Content`, which `pi_sms.modem.sms.is_mms` detects to trigger the configured auto-reply (see `mms.enabled`/`mms.reply_text` in [config.example.yaml](config.example.yaml)).
+
+On the reply side, Trello stores comment text as markdown source: typing or autocompleting an emoji in a Trello reply comment leaves `:shortcode:` syntax (e.g. `:heart:`) in the raw API text rather than the rendered glyph. `pi_sms.reply.text.resolve_emoji_shortcodes` resolves these back into the actual Unicode character (using Trello's public emoji list, fetched and cached once per process) before the reply is sent as an SMS, so a reply is never sent as literal shortcode text. Whether the resulting character transmits correctly over the air is still subject to the same UCS-2 firmware limitation described above: BMP characters (`❤️`, `★`, etc.) should send correctly, but non-BMP emoji may still not.
 
 ### No SIM / no signal
 
