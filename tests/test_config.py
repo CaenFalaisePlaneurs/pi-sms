@@ -20,6 +20,7 @@ def test_config_uses_defaults_when_optional_sections_missing() -> None:
     assert config.filter.exclude_patterns == []
     assert config.debug is None
     assert config.reply.sqlite_path == "/var/lib/pi-sms/reply.sqlite"
+    assert config.mms.ignore_sender_max_digits == 5
 
 
 def test_config_requires_trello_section() -> None:
@@ -32,6 +33,7 @@ def test_config_accepts_full_example() -> None:
         "modem": {"base_url": "http://192.168.8.1", "request_timeout_seconds": 5},
         "poll": {"interval_seconds": 15},
         "filter": {"exclude_patterns": ['^Messagerie "666" Free:']},
+        "mms": {"ignore_sender_max_digits": 4},
         "trello": {
             "key": "k",
             "token": "t",
@@ -46,5 +48,6 @@ def test_config_accepts_full_example() -> None:
 
     assert config.poll.interval_seconds == 15
     assert config.filter.exclude_patterns == ['^Messagerie "666" Free:']
+    assert config.mms.ignore_sender_max_digits == 4
     assert config.debug is not None
     assert config.debug.poll_interval_seconds == 2

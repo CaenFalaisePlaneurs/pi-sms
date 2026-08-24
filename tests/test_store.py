@@ -6,13 +6,16 @@ from pi_sms.reply.store import (
     STATUS_PENDING,
     STATUS_SENT,
     STATUS_SENT_UNCONFIRMED,
+    clear_mms_auto_reply,
     get_board_id,
     get_last_action_id,
     get_meta,
     get_reply,
+    has_mms_auto_reply,
     insert_reply,
     list_retryable,
     mark_failure_notice_posted,
+    mark_mms_auto_reply,
     open_store,
     set_board_id,
     set_last_action_id,
@@ -136,5 +139,20 @@ def test_status_and_failure_notice_transitions(tmp_path: Path) -> None:
         assert record is not None
         assert record.status == STATUS_SENT
         assert all(row.trigger_comment_id != "trig-1" for row in list_retryable(conn))
+    finally:
+        conn.close()
+
+
+def test_mms_auto_reply_mark_matches_index_and_phone(tmp_path: Path) -> None:
+    conn = open_store(str(tmp_path / "reply.sqlite"))
+    try:
+        mark_mms_auto_reply(conn, "1", "+33600000000")
+
+        assert has_mms_auto_reply(conn, "1", "+33600000000") is True
+        assert has_mms_auto_reply(conn, "1", "+33611111111") is False
+        assert has_mms_auto_reply(conn, "2", "+33600000000") is False
+
+        clear_mms_auto_reply(conn, "1")
+        assert has_mms_auto_reply(conn, "1", "+33600000000") is False
     finally:
         conn.close()

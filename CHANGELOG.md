@@ -6,6 +6,7 @@
 
 - One-command installer (`scripts/install.sh`) that installs base tools, creates a virtual environment, installs the package from GitHub, and runs setup non-interactively
 - One Trello card per phone number: the first SMS from a number creates a card, and later SMS from the same number are appended as comments, so a card reads as a conversation thread (configurable via the new `trello.card_comment_template`)
+- `mms.ignore_sender_max_digits` (default 5) to override how many digits count as a short code that should not receive an MMS auto-reply or a Trello SMS reply
 
 ### Changed
 
@@ -18,6 +19,8 @@
 - The one-command installer now force-reinstalls `pi-sms` (without reinstalling unchanged dependencies) when it detects an existing installation, since a plain `pip install git+URL` silently skips reinstalling an already-installed package name even when the underlying commit changed
 - Trello reply comments containing an emoji (e.g. `:heart:`) no longer send the literal shortcode text as the SMS body; Trello stores comment text as markdown source, so typing or autocompleting an emoji leaves the `:shortcode:` syntax in the raw API text, and it is now resolved back into the actual character before sending
 - Long SMS that arrive as several modem inbox parts are posted as a single Trello comment: young multipart segments are left on the modem so firmware can merge them, and leftover parts from the same sender are joined in date-then-index order
+- An incoming MMS now triggers at most one auto-reply SMS: empty inbox rows from the same sender are grouped, and a successful send is recorded so a failed modem delete retries cleanup without sending again
+- Senders of up to 5 digits (French short codes such as `2051`) are treated as non-replyable, so they no longer receive an MMS auto-reply SMS
 
 ## [0.1.0] - 2026-07-16
 

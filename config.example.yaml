@@ -23,9 +23,11 @@ filter:
 # as for photos and attachments. No Trello card is created for the MMS
 # itself; a plain-text SMS follow-up creates one through the normal flow.
 # Senders that cannot be replied to (alphanumeric IDs, short codes) are
-# silently discarded.
+# silently discarded. ignore_sender_max_digits (default 5) is the cutoff:
+# senders with that many digits or fewer get no auto-reply and no Trello SMS.
 mms:
   enabled: true
+  ignore_sender_max_digits: 5
   reply_text: >-
     Ce numéro ne lit pas les MMS (photos, pièces jointes, ou textes trop
     longs que le téléphone envoie en MMS). Merci de renvoyer en SMS texte,
@@ -80,8 +82,9 @@ reply:
   sent_tag_template: "[Réponse envoyée le {date} a {time}]"
   failure_marker: "[Echec d'envoi"
   failure_tag_template: "[Echec d'envoi, nouvelle tentative en cours]"
-  # Persisted cursor and send state so reply polls fetch only new board comments
-  # instead of listing every card. systemd StateDirectory=pi-sms creates this dir.
+  # Persisted cursor, reply send state, and MMS auto-reply markers. Reply polls
+  # fetch only new board comments instead of listing every card.
+  # systemd StateDirectory=pi-sms creates this dir.
   sqlite_path: "/var/lib/pi-sms/reply.sqlite"
 
 # Debug mode (for development/testing only)

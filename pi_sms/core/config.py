@@ -6,6 +6,8 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, Field, ValidationError
 
+from ..modem.sms import DEFAULT_IGNORE_SENDER_MAX_DIGITS
+
 
 class ModemConfig(BaseModel):
     """Huawei E3372 HiLink modem configuration."""
@@ -71,6 +73,12 @@ class MmsConfig(BaseModel):
         "contact@caenfalaiseplaneurs.fr",
         description="Auto-reply SMS sent to the sender of a detected MMS",
     )
+    ignore_sender_max_digits: int = Field(
+        DEFAULT_IGNORE_SENDER_MAX_DIGITS,
+        ge=0,
+        le=14,
+        description="Senders with this many digits or fewer are treated as short codes",
+    )
 
 
 class ReplyConfig(BaseModel):
@@ -115,7 +123,7 @@ class ReplyConfig(BaseModel):
     sqlite_path: str = Field(
         "/var/lib/pi-sms/reply.sqlite",
         min_length=1,
-        description="SQLite file for the reply comment cursor and send state",
+        description="SQLite file for the reply comment cursor, send state, and MMS auto-reply markers",
     )
 
 

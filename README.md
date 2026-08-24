@@ -87,7 +87,7 @@ flowchart LR
   notice -->|"yes"| silent["Keep pending for next poll"]
 ```
 
-Reply polls persist their cursor and send state in SQLite (`reply.sqlite_path`, default `/var/lib/pi-sms/reply.sqlite`) so later polls fetch only new board comments instead of listing every card.
+Reply polls persist their cursor and send state in SQLite (`reply.sqlite_path`, default `/var/lib/pi-sms/reply.sqlite`) so later polls fetch only new board comments instead of listing every card. The same file records MMS inbox rows that already received an auto-reply so a failed modem delete cannot send a second SMS.
 
 ## Installation
 
@@ -193,7 +193,7 @@ See [config.example.yaml](config.example.yaml) for all configuration options, in
 - `modem`: base URL and request timeout for the HiLink API
 - `poll`: how often to check the inbox
 - `filter`: regex patterns for messages to discard without a card
-- `mms`: whether to auto-reply to detected MMS, and the reply text
+- `mms`: whether to auto-reply to detected MMS, the reply text, and `ignore_sender_max_digits` (default 5) for short-code senders
 - `trello`: API key/token, destination list, and card title/description/comment templates
 - `reply`: trigger marker, reply poll interval, sent/failure status comment templates, and SQLite path for the comment cursor (see "Replying to an SMS from Trello" above)
 - `debug`: faster poll interval when `DEBUG_MODE=true`

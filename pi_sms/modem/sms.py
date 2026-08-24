@@ -4,7 +4,9 @@ import re
 from dataclasses import dataclass
 from xml.etree import ElementTree
 
-_REPLYABLE_PHONE_PATTERN = re.compile(r"^\+?[0-9]{4,15}$")
+# Digit counts at or below this are treated as short codes, not MSISDNs.
+DEFAULT_IGNORE_SENDER_MAX_DIGITS = 5
+_MAX_REPLYABLE_DIGITS = 15
 
 
 @dataclass
@@ -74,16 +76,28 @@ def is_mms(message: SmsMessage) -> bool:
     return message.content.strip() == ""
 
 
-def is_replyable_sender(phone: str) -> bool:
+def is_replyable_sender(
+    phone: str,
+    ignore_max_digits: int = DEFAULT_IGNORE_SENDER_MAX_DIGITS,
+) -> bool:
     """Return True if a phone number looks like a real MSISDN we can SMS back.
 
-    Alphanumeric sender IDs (e.g. "Free") and short codes are send-only or not
-    associated with a real subscriber, so replying to them is pointless.
+    Alphanumeric sender IDs (e.g. "Free") and short codes whose digit count
+    is at most `ignore_max_digits` are send-only or not associated with a
+    real subscriber, so replying to them is pointless.
     """
-    return bool(_REPLYABLE_PHONE_PATTERN.match(phone.strip()))
+    stripped = phone.strip()
+    if stripped.startswith("+"):
+        stripped = stripped[1:]
+    if not stripped.isdigit():
+        return False
+    return ignore_max_digits < len(stripped) <= _MAX_REPLYABLE_DIGITS
 
 
-def find_replyable_phone(text: str) -> str | None:
+def find_replyable_phone(
+    text: str,
+    ignore_max_digits: int = DEFAULT_IGNORE_SENDER_MAX_DIGITS,
+) -> str | None:
     """Return the first MSISDN-like token in text that we can SMS back.
 
     Used to recover the sender phone number embedded in a Trello card name
@@ -96,9 +110,13 @@ def find_replyable_phone(text: str) -> str | None:
     but a reordered template with a numeric field ahead of `{phone}` could
     cause the wrong token to be picked up.
     """
-    for candidate in re.findall(r"\+?\d{4,15}", text):
+    min_digits = ignore_max_digits + 1
+    if min_digits > _MAX_REPLYABLE_DIGITS:
+        return None
+    pattern = rf"\+?\d{{{min_digits},{_MAX_REPLYABLE_DIGITS}}}"
+    for candidate in re.findall(pattern, text):
         candidate_str = str(candidate)
-        if is_replyable_sender(candidate_str):
+        if is_replyable_sender(candidate_str, ignore_max_digits):
             return candidate_str
     return None
 

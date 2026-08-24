@@ -1,7 +1,9 @@
-"""SQLite persistence for Trello-comment-driven SMS replies.
+"""SQLite persistence for Trello-comment-driven SMS replies and MMS auto-replies.
 
 Stores the board comment cursor and per-trigger send state so reply polls
-can process new comments incrementally instead of listing every card.
+can process new comments incrementally instead of listing every card. The
+same file also records MMS inbox rows that already received an auto-reply,
+so a failed modem delete cannot trigger a second SMS.
 """
 
 from __future__ import annotations
@@ -73,6 +75,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
             failure_notice_posted INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
+        )
+        """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS mms_auto_replies (
+            inbox_index TEXT PRIMARY KEY,
+            phone TEXT NOT NULL,
+            sent_at TEXT NOT NULL
         )
         """)
     conn.commit()
@@ -201,6 +210,34 @@ def mark_failure_notice_posted(conn: sqlite3.Connection, trigger_comment_id: str
         """,
         (_utc_now(), trigger_comment_id),
     )
+    conn.commit()
+
+
+def has_mms_auto_reply(conn: sqlite3.Connection, inbox_index: str, phone: str) -> bool:
+    """Return True if this inbox row already triggered an MMS auto-reply SMS."""
+    row = conn.execute(
+        "SELECT 1 FROM mms_auto_replies WHERE inbox_index = ? AND phone = ?",
+        (inbox_index, phone),
+    ).fetchone()
+    return row is not None
+
+
+def mark_mms_auto_reply(conn: sqlite3.Connection, inbox_index: str, phone: str) -> None:
+    """Record that an MMS auto-reply was sent for this inbox row."""
+    conn.execute(
+        """
+        INSERT INTO mms_auto_replies (inbox_index, phone, sent_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(inbox_index) DO UPDATE SET phone = excluded.phone, sent_at = excluded.sent_at
+        """,
+        (inbox_index, phone, _utc_now()),
+    )
+    conn.commit()
+
+
+def clear_mms_auto_reply(conn: sqlite3.Connection, inbox_index: str) -> None:
+    """Drop the MMS auto-reply marker after the inbox row has been deleted."""
+    conn.execute("DELETE FROM mms_auto_replies WHERE inbox_index = ?", (inbox_index,))
     conn.commit()
 
 

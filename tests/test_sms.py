@@ -126,6 +126,17 @@ def test_is_replyable_sender_false_for_empty_phone() -> None:
 
 def test_is_replyable_sender_false_for_short_code() -> None:
     assert is_replyable_sender("666") is False
+    assert is_replyable_sender("2051") is False
+    assert is_replyable_sender("12345") is False
+
+
+def test_is_replyable_sender_true_for_six_digit_number() -> None:
+    assert is_replyable_sender("123456") is True
+
+
+def test_is_replyable_sender_honors_ignore_max_digits_override() -> None:
+    assert is_replyable_sender("2051", ignore_max_digits=3) is True
+    assert is_replyable_sender("2051", ignore_max_digits=4) is False
 
 
 def test_find_replyable_phone_extracts_number_from_card_name() -> None:
@@ -138,6 +149,12 @@ def test_find_replyable_phone_returns_none_when_no_number_present() -> None:
 
 def test_find_replyable_phone_returns_none_for_short_code() -> None:
     assert find_replyable_phone("SMS from 666") is None
+    assert find_replyable_phone("SMS from 2051") is None
+
+
+def test_find_replyable_phone_honors_ignore_max_digits_override() -> None:
+    assert find_replyable_phone("SMS from 2051", ignore_max_digits=3) == "2051"
+    assert find_replyable_phone("SMS from 2051", ignore_max_digits=4) is None
 
 
 def test_find_replyable_phone_returns_first_replyable_match() -> None:

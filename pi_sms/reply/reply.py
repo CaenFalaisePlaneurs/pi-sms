@@ -352,7 +352,7 @@ async def _attempt_send(
     if record.status == STATUS_SENT:
         return
 
-    phone = find_replyable_phone(record.card_name)
+    phone = find_replyable_phone(record.card_name, config.mms.ignore_sender_max_digits)
     if phone is None:
         debug_print(f"Reply poll: no replyable phone found in card name '{record.card_name}'")
         return
